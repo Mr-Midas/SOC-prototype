@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import random
+import secrets
+import sqlite3
+import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
+from urllib.parse import quote
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
@@ -104,6 +112,31 @@ class RuntimeStatus(BaseModel):
     max_alerts: int
 
 
+class WebhookIngestRequest(BaseModel):
+    source: str = Field(default="External Webhook", min_length=1, max_length=80)
+    rule_name: str = Field(min_length=3, max_length=160)
+    summary: str = Field(min_length=10, max_length=600)
+    severity: Optional[SeverityLevel] = None
+    mitre_tactic: str = Field(default="Unknown", max_length=80)
+    scenario_id: str = Field(default="external_detection", max_length=80)
+    affected_user: Optional[str] = Field(default=None, max_length=120)
+    affected_host: Optional[str] = Field(default=None, max_length=120)
+    source_ip: Optional[str] = Field(default=None, max_length=80)
+    indicators: list[str] = Field(default_factory=list, max_length=25)
+    telemetry: list[str] = Field(default_factory=list, max_length=25)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class UserIdentity(BaseModel):
+    username: str
+    role: Literal["analyst", "governor", "admin"]
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -115,22 +148,272 @@ def env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+class DatabaseManager:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.lock = threading.Lock()
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    rule_name TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    governor_status TEXT NOT NULL,
+                    data_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS approvals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alert_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    note TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS action_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alert_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    result_json TEXT
+                );
+                """
+            )
+            self.conn.commit()
+
+    def upsert_user(self, username: str, password_hash: str, role: str) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO users (username, password_hash, role, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    password_hash=excluded.password_hash,
+                    role=excluded.role
+                """,
+                (username, password_hash, role, utc_now().isoformat()),
+            )
+            self.conn.commit()
+
+    def get_user(self, username: str) -> Optional[sqlite3.Row]:
+        with self.lock:
+            return self.conn.execute(
+                "SELECT username, password_hash, role FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+
+    def save_alert(self, alert: AlertRecord) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO alerts (id, created_at, source, rule_name, severity, governor_status, data_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    alert.id,
+                    alert.created_at.isoformat(),
+                    alert.source,
+                    alert.rule_name,
+                    alert.manager.severity,
+                    alert.governor.status,
+                    alert.model_dump_json(),
+                ),
+            )
+            self.conn.commit()
+
+    def load_alerts(self, limit: int) -> list[AlertRecord]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT data_json FROM alerts ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [AlertRecord.model_validate_json(row["data_json"]) for row in rows]
+
+    def save_approval(self, alert_id: str, username: str, decision: str, note: Optional[str]) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO approvals (alert_id, username, decision, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (alert_id, username, decision, note, utc_now().isoformat()),
+            )
+            self.conn.commit()
+
+    def enqueue_action(self, alert_id: str, action_type: str, payload: dict[str, Any]) -> None:
+        now = utc_now().isoformat()
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO action_queue (alert_id, action_type, payload_json, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'pending', ?, ?)
+                """,
+                (alert_id, action_type, json.dumps(payload), now, now),
+            )
+            self.conn.commit()
+
+    def next_pending_action(self) -> Optional[sqlite3.Row]:
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT id, alert_id, action_type, payload_json
+                FROM action_queue
+                WHERE status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row:
+                self.conn.execute(
+                    "UPDATE action_queue SET status = 'running', updated_at = ? WHERE id = ?",
+                    (utc_now().isoformat(), row["id"]),
+                )
+                self.conn.commit()
+            return row
+
+    def complete_action(self, action_id: int, status: str, result: dict[str, Any]) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                UPDATE action_queue
+                SET status = ?, updated_at = ?, result_json = ?
+                WHERE id = ?
+                """,
+                (status, utc_now().isoformat(), json.dumps(result), action_id),
+            )
+            self.conn.commit()
+
+
 class AgenticSOCService:
     def __init__(self) -> None:
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.db = DatabaseManager(BASE_DIR / "soc.db")
+        self.ai_provider = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+        self.model = self._resolve_default_model()
         self.auto_generate = env_flag("ENABLE_AUTO_ALERTS", True)
         self.generation_interval_seconds = max(15, int(os.getenv("ALERT_INTERVAL_SECONDS", "45")))
         self.max_alerts = max(10, int(os.getenv("MAX_STORED_ALERTS", "40")))
-        self.client = self._build_openai_client()
+        self.webhook_shared_secret = os.getenv("WEBHOOK_SHARED_SECRET", "").strip()
+        self.session_secret = os.getenv("SESSION_SECRET", "dev-session-secret-change-me").strip()
+        self.abuseipdb_api_key = os.getenv("ABUSEIPDB_API_KEY", "").strip()
+        self.otx_api_key = os.getenv("OTX_API_KEY", "").strip()
+        self.connector_mode = os.getenv("CONNECTOR_MODE", "dry_run").strip().lower()
+        self.containment_webhook_url = os.getenv("CONTAINMENT_WEBHOOK_URL", "").strip()
+        self.client = self._build_ai_client()
         self.alerts: list[AlertRecord] = []
         self.lock = asyncio.Lock()
         self.generator_task: Optional[asyncio.Task[None]] = None
+        self.queue_task: Optional[asyncio.Task[None]] = None
+        self._seed_default_users()
 
-    def _build_openai_client(self) -> Any:
-        api_key = os.getenv("OPENAI_API_KEY")
+    def _resolve_default_model(self) -> str:
+        if self.ai_provider == "ollama":
+            return os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+        if self.ai_provider == "gemini":
+            return os.getenv("GEMINI_MODEL", os.getenv("OPENAI_MODEL", "gemini-2.5-flash"))
+        return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    def _seed_default_users(self) -> None:
+        defaults = [
+            (
+                os.getenv("DEFAULT_ADMIN_USERNAME", "admin"),
+                os.getenv("DEFAULT_ADMIN_PASSWORD", "ChangeMe123!"),
+                "admin",
+            ),
+            (
+                os.getenv("DEFAULT_GOVERNOR_USERNAME", "governor"),
+                os.getenv("DEFAULT_GOVERNOR_PASSWORD", "ChangeMe123!"),
+                "governor",
+            ),
+        ]
+        for username, password, role in defaults:
+            self.db.upsert_user(username, self._hash_password(password), role)
+
+    def _hash_password(self, password: str) -> str:
+        salt = secrets.token_hex(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000)
+        return f"{salt}${digest.hex()}"
+
+    def _verify_password(self, password: str, password_hash: str) -> bool:
+        try:
+            salt, expected = password_hash.split("$", 1)
+        except ValueError:
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000)
+        return hmac.compare_digest(digest.hex(), expected)
+
+    def issue_session_token(self, username: str, role: str) -> str:
+        payload = f"{username}|{role}"
+        signature = hmac.new(
+            self.session_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{payload}|{signature}"
+
+    def verify_session_token(self, token: str) -> Optional[UserIdentity]:
+        try:
+            username, role, signature = token.split("|", 2)
+        except ValueError:
+            return None
+        payload = f"{username}|{role}"
+        expected = hmac.new(
+            self.session_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        if role not in {"analyst", "governor", "admin"}:
+            return None
+        return UserIdentity(username=username, role=role)  # type: ignore[arg-type]
+
+    def authenticate_user(self, username: str, password: str) -> Optional[UserIdentity]:
+        row = self.db.get_user(username)
+        if not row or not self._verify_password(password, row["password_hash"]):
+            return None
+        return UserIdentity(username=row["username"], role=row["role"])
+
+    def _build_ai_client(self) -> Any:
+        if self.ai_provider == "ollama":
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/api").rstrip("/")
+            timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
+            print(
+                f"[CONFIG] Live AI mode enabled. provider={self.ai_provider} "
+                f"model={self.model} base_url={base_url}"
+            )
+            return httpx.Client(base_url=base_url, timeout=timeout_seconds)
+
+        if self.ai_provider == "gemini":
+            api_key = os.getenv("GEMINI_API_KEY")
+            base_url = os.getenv(
+                "GEMINI_BASE_URL",
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+            key_name = "GEMINI_API_KEY"
+        else:
+            api_key = os.getenv("OPENAI_API_KEY")
+            base_url = os.getenv("OPENAI_BASE_URL")
+            key_name = "OPENAI_API_KEY"
 
         if not api_key:
-            print("[CONFIG] OPENAI_API_KEY not found. Running in deterministic fallback mode.")
+            print(f"[CONFIG] {key_name} not found. Running in deterministic fallback mode.")
             return None
 
         if OpenAI is None:
@@ -140,8 +423,12 @@ class AgenticSOCService:
             )
             return None
 
-        print(f"[CONFIG] Live OpenAI mode enabled. model={self.model}")
-        return OpenAI(api_key=api_key)
+        print(f"[CONFIG] Live AI mode enabled. provider={self.ai_provider} model={self.model}")
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        return OpenAI(**client_kwargs)
 
     def runtime_status(self) -> RuntimeStatus:
         return RuntimeStatus(
@@ -155,15 +442,19 @@ class AgenticSOCService:
     def frontend_bootstrap(self) -> dict[str, Any]:
         status = self.runtime_status()
         return {
+            "provider": self.ai_provider,
             "liveAiMode": status.live_ai_mode,
             "model": status.model,
             "autoGenerate": status.auto_generate,
             "generationIntervalSeconds": status.generation_interval_seconds,
             "maxAlerts": status.max_alerts,
+            "realIngestionEnabled": True,
         }
 
     async def start(self) -> None:
         print("[APP] Starting Agentic SOC service.")
+        if not self.alerts:
+            self.alerts = self.db.load_alerts(self.max_alerts)
         if not self.alerts:
             await self.generate_and_store_alert("startup-seed")
 
@@ -173,6 +464,8 @@ class AgenticSOCService:
                 f"[APP] Automatic alert generation enabled every "
                 f"{self.generation_interval_seconds} seconds."
             )
+        if self.queue_task is None:
+            self.queue_task = asyncio.create_task(self._action_queue_loop())
 
     async def stop(self) -> None:
         print("[APP] Stopping Agentic SOC service.")
@@ -181,6 +474,13 @@ class AgenticSOCService:
             with suppress(asyncio.CancelledError):
                 await self.generator_task
             self.generator_task = None
+        if self.queue_task:
+            self.queue_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.queue_task
+            self.queue_task = None
+        if self.ai_provider == "ollama" and self.client:
+            self.client.close()
 
     async def _generator_loop(self) -> None:
         try:
@@ -189,6 +489,15 @@ class AgenticSOCService:
                 await self.generate_and_store_alert("timer")
         except asyncio.CancelledError:
             print("[APP] Background generator loop cancelled.")
+            raise
+
+    async def _action_queue_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(2)
+                await asyncio.to_thread(self._process_next_action)
+        except asyncio.CancelledError:
+            print("[APP] Action queue loop cancelled.")
             raise
 
     async def list_alerts(self) -> list[AlertRecord]:
@@ -203,7 +512,39 @@ class AgenticSOCService:
 
         raise KeyError(alert_id)
 
-    async def record_decision(self, alert_id: str, payload: DecisionRequest) -> AlertRecord:
+    def _process_next_action(self) -> None:
+        row = self.db.next_pending_action()
+        if not row:
+            return
+        try:
+            payload = json.loads(row["payload_json"])
+            if self.connector_mode == "webhook" and self.containment_webhook_url:
+                response = httpx.post(self.containment_webhook_url, json=payload, timeout=20.0)
+                response.raise_for_status()
+                result = {
+                    "mode": "webhook",
+                    "status_code": response.status_code,
+                    "response_excerpt": response.text[:500],
+                }
+                status = "executed"
+            else:
+                result = {
+                    "mode": "dry_run",
+                    "message": "Action recorded but not sent to a live downstream connector.",
+                    "payload": payload,
+                }
+                status = "executed"
+        except Exception as exc:
+            status = "failed"
+            result = {"error": str(exc), "mode": self.connector_mode}
+        self.db.complete_action(row["id"], status, result)
+
+    async def record_decision(
+        self,
+        alert_id: str,
+        payload: DecisionRequest,
+        actor: UserIdentity,
+    ) -> AlertRecord:
         decision_status: GovernorStatus = "Approved" if payload.decision == "approve" else "Rejected"
         decision_summary = (
             "Tier 4 Governor approved the containment action and cleared it for execution."
@@ -237,6 +578,21 @@ class AgenticSOCService:
                 )
                 alert.reasoning_log = updated_log
                 self.alerts[index] = alert
+                self.db.save_alert(alert)
+                self.db.save_approval(alert.id, actor.username, decision_status, payload.operator_note)
+                if decision_status == "Approved":
+                    self.db.enqueue_action(
+                        alert.id,
+                        alert.containment.action_type,
+                        {
+                            "alert_id": alert.id,
+                            "source": alert.source,
+                            "proposed_action": alert.containment.proposed_action,
+                            "action_type": alert.containment.action_type,
+                            "approved_by": actor.username,
+                            "operator_note": payload.operator_note,
+                        },
+                    )
 
                 print(
                     f"[GOVERNOR] alert_id={alert.id} decision={decision_status} "
@@ -258,6 +614,28 @@ class AgenticSOCService:
         async with self.lock:
             self.alerts.insert(0, processed_alert)
             self.alerts = self.alerts[: self.max_alerts]
+            self.db.save_alert(processed_alert)
+
+        return processed_alert.model_copy(deep=True)
+
+    async def ingest_external_alert(
+        self,
+        payload: WebhookIngestRequest,
+        raw_body: bytes,
+        signature: Optional[str],
+    ) -> AlertRecord:
+        self._validate_webhook_signature(raw_body, signature)
+        normalized_alert = await asyncio.to_thread(self._normalize_external_alert, payload.model_dump())
+        print(
+            f"[INGEST] Received external alert_id={normalized_alert['alert_id']} "
+            f"source={normalized_alert['source']} rule={normalized_alert['rule_name']}"
+        )
+        processed_alert = await asyncio.to_thread(self._process_alert, normalized_alert, "webhook")
+
+        async with self.lock:
+            self.alerts.insert(0, processed_alert)
+            self.alerts = self.alerts[: self.max_alerts]
+            self.db.save_alert(processed_alert)
 
         return processed_alert.model_copy(deep=True)
 
@@ -310,6 +688,177 @@ class AgenticSOCService:
             ],
             raw_alert=raw_alert,
         )
+
+    def _validate_webhook_signature(self, raw_body: bytes, signature: Optional[str]) -> None:
+        if not self.webhook_shared_secret:
+            return
+
+        if not signature:
+            raise HTTPException(status_code=401, detail="Missing webhook signature.")
+
+        expected = hmac.new(
+            self.webhook_shared_secret.encode("utf-8"),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+        provided = signature.replace("sha256=", "").strip()
+
+        if not hmac.compare_digest(expected, provided):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
+    def _normalize_external_alert(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_ip = payload.get("source_ip") or None
+        affected_user = payload.get("affected_user") or None
+        affected_host = payload.get("affected_host") or None
+        indicators = [str(item) for item in payload.get("indicators", []) if str(item).strip()]
+        telemetry = [str(item) for item in payload.get("telemetry", []) if str(item).strip()]
+        metadata = payload.get("metadata", {})
+
+        enrichments = self._enrich_indicators(source_ip)
+        enrichment_summary = self._summarize_enrichments(enrichments)
+
+        if source_ip and source_ip not in indicators:
+            indicators.insert(0, source_ip)
+        if affected_user and affected_user not in indicators:
+            indicators.append(affected_user)
+        if affected_host and affected_host not in indicators:
+            indicators.append(affected_host)
+
+        if enrichment_summary:
+            telemetry.extend(enrichment_summary)
+
+        severity = payload.get("severity")
+        scenario_id = payload.get("scenario_id") or "external_detection"
+
+        if not severity:
+            severity = self._estimate_external_severity(payload, enrichments)
+
+        return {
+            "alert_id": self._new_alert_id(),
+            "generated_at": utc_now().isoformat(),
+            "scenario_id": scenario_id,
+            "source": payload["source"],
+            "rule_name": payload["rule_name"],
+            "summary": payload["summary"],
+            "mitre_tactic": payload.get("mitre_tactic") or "Unknown",
+            "affected_user": affected_user,
+            "affected_host": affected_host,
+            "source_ip": source_ip,
+            "indicators": indicators[:25],
+            "telemetry": telemetry[:25],
+            "metadata": metadata,
+            "enrichments": enrichments,
+            "analyst_supplied_severity": severity,
+        }
+
+    def _estimate_external_severity(
+        self,
+        payload: dict[str, Any],
+        enrichments: dict[str, Any],
+    ) -> SeverityLevel:
+        text = " ".join(
+            [
+                payload.get("rule_name", ""),
+                payload.get("summary", ""),
+                " ".join(payload.get("telemetry", [])),
+                " ".join(payload.get("indicators", [])),
+            ]
+        ).lower()
+
+        critical_terms = ["ransomware", "exfil", "data theft", "domain admin", "mass encryption"]
+        high_terms = ["powershell", "credential", "lateral", "privilege", "c2", "impossible travel"]
+        medium_terms = ["brute force", "password spray", "failed login", "phishing"]
+
+        if any(term in text for term in critical_terms):
+            return "Critical"
+        if any(term in text for term in high_terms):
+            return "High"
+        if any(term in text for term in medium_terms):
+            return "Medium"
+
+        abuse_confidence = enrichments.get("abuseipdb", {}).get("abuseConfidenceScore", 0)
+        if abuse_confidence >= 90:
+            return "High"
+        if abuse_confidence >= 60:
+            return "Medium"
+        return "Low"
+
+    def _enrich_indicators(self, source_ip: Optional[str]) -> dict[str, Any]:
+        enrichments: dict[str, Any] = {}
+        if not source_ip or not self._is_public_ip(source_ip):
+            return enrichments
+
+        if self.abuseipdb_api_key:
+            enrichments["abuseipdb"] = self._lookup_abuseipdb(source_ip)
+        if self.otx_api_key:
+            enrichments["otx"] = self._lookup_otx(source_ip)
+        return enrichments
+
+    def _summarize_enrichments(self, enrichments: dict[str, Any]) -> list[str]:
+        summary: list[str] = []
+
+        abuse = enrichments.get("abuseipdb")
+        if abuse and not abuse.get("error"):
+            score = abuse.get("abuseConfidenceScore", 0)
+            reports = abuse.get("totalReports", 0)
+            usage = abuse.get("usageType") or "unknown usage type"
+            summary.append(
+                f"AbuseIPDB reports source IP confidence {score}/100 with {reports} reports; usage type: {usage}."
+            )
+
+        otx = enrichments.get("otx")
+        if otx and not otx.get("error"):
+            pulse_count = otx.get("pulse_info", {}).get("count", 0)
+            reputation = otx.get("reputation", 0)
+            country = otx.get("country_name") or "unknown country"
+            summary.append(
+                f"AlienVault OTX returned reputation {reputation} with {pulse_count} pulses for the source IP ({country})."
+            )
+
+        return summary
+
+    def _is_public_ip(self, value: str) -> bool:
+        try:
+            ip_obj = ipaddress.ip_address(value)
+            return not (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_reserved
+                or ip_obj.is_multicast
+                or ip_obj.is_unspecified
+            )
+        except ValueError:
+            return False
+
+    def _lookup_abuseipdb(self, ip_value: str) -> dict[str, Any]:
+        try:
+            response = httpx.get(
+                "https://api.abuseipdb.com/api/v2/check",
+                headers={
+                    "Key": self.abuseipdb_api_key,
+                    "Accept": "application/json",
+                },
+                params={"ipAddress": ip_value, "maxAgeInDays": 90},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json().get("data", {})
+        except Exception as exc:
+            print(f"[ENRICHMENT] AbuseIPDB lookup failed for {ip_value}: {exc}")
+            return {"error": str(exc)}
+
+    def _lookup_otx(self, ip_value: str) -> dict[str, Any]:
+        try:
+            response = httpx.get(
+                f"https://otx.alienvault.com/api/v1/indicators/IPv4/{quote(ip_value)}/general",
+                headers={"X-OTX-API-KEY": self.otx_api_key},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            print(f"[ENRICHMENT] OTX lookup failed for {ip_value}: {exc}")
+            return {"error": str(exc)}
 
     def _run_manager_agent(self, raw_alert: dict[str, Any]) -> ManagerDecision:
         fallback = self._fallback_manager(raw_alert)
@@ -423,16 +972,46 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
             return fallback
 
         try:
-            response = self.client.responses.create(
-                model=self.model,
-                input=[
-                    {"role": "developer", "content": prompt},
-                    {"role": "user", "content": json.dumps(payload, indent=2)},
-                ],
-                text={"format": {"type": "json_object"}},
-            )
+            if self.ai_provider == "ollama":
+                response = self.client.post(
+                    "/chat",
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": json.dumps(payload, indent=2)},
+                        ],
+                        "stream": False,
+                        "format": "json",
+                        "options": {
+                            "temperature": 0.2,
+                        },
+                    },
+                )
+                response.raise_for_status()
+                response_payload = response.json()
+                raw_text = (response_payload.get("message", {}).get("content") or "").strip()
+            elif self.ai_provider == "gemini":
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": json.dumps(payload, indent=2)},
+                    ],
+                    response_format={"type": "json_object"},
+                )
+                raw_text = (response.choices[0].message.content or "").strip()
+            else:
+                response = self.client.responses.create(
+                    model=self.model,
+                    input=[
+                        {"role": "developer", "content": prompt},
+                        {"role": "user", "content": json.dumps(payload, indent=2)},
+                    ],
+                    text={"format": {"type": "json_object"}},
+                )
+                raw_text = (response.output_text or "").strip()
 
-            raw_text = (response.output_text or "").strip()
             print(f"[OPENAI:{agent_name}] raw_response={raw_text}")
 
             if not raw_text:
@@ -442,6 +1021,8 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
             return model_class.model_validate(data)
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
             print(f"[OPENAI:{agent_name}] Response validation failed: {exc}. Using fallback.")
+        except httpx.HTTPError as exc:
+            print(f"[OPENAI:{agent_name}] HTTP call failed: {exc}. Using fallback.")
         except Exception as exc:  # pragma: no cover - external API behavior
             print(f"[OPENAI:{agent_name}] API call failed: {exc}. Using fallback.")
 
@@ -452,9 +1033,65 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
         user = raw_alert.get("affected_user") or "unknown-user"
         host = raw_alert.get("affected_host") or "unknown-host"
         source_ip = raw_alert.get("source_ip") or "unknown-ip"
+        if scenario_id == "external_detection":
+            analyst_supplied_severity = raw_alert.get("analyst_supplied_severity", "Medium")
+            telemetry = raw_alert.get("telemetry", [])
+            enrichments = raw_alert.get("enrichments", {})
+            supporting_evidence = telemetry[:3] if telemetry else [
+                "A live webhook alert was received from an external detection source.",
+                "The alert payload was normalized into the SOC workflow for investigation.",
+            ]
+            abuse = enrichments.get("abuseipdb", {})
+            abuse_score = abuse.get("abuseConfidenceScore", 0)
+            confidence = 55 if analyst_supplied_severity == "Low" else 72 if analyst_supplied_severity == "Medium" else 84
+            if abuse_score >= 90:
+                confidence = min(96, confidence + 10)
+            elif abuse_score >= 60:
+                confidence = min(90, confidence + 6)
 
-        profiles: dict[str, dict[str, Any]] = {
-            "impossible_travel": {
+            action_type = "Network Blocking" if source_ip != "unknown-ip" else "Identity Containment"
+            proposed_action = (
+                f"Block source IP {source_ip} at the edge and preserve host {host} for deeper review."
+                if source_ip != "unknown-ip"
+                else f"Require containment review for user {user} and isolate host {host} if additional telemetry confirms impact."
+            )
+
+            return {
+                "severity": analyst_supplied_severity,
+                "risk_score": 35 if analyst_supplied_severity == "Low" else 62 if analyst_supplied_severity == "Medium" else 83 if analyst_supplied_severity == "High" else 95,
+                "confidence_score": confidence,
+                "classification": "True Positive" if confidence >= 80 else "Needs More Data",
+                "routing_rationale": (
+                    "A live externally supplied alert entered the SOC pipeline and was prioritized using the "
+                    "webhook metadata plus any available threat-intelligence enrichment."
+                ),
+                "triage_focus": [
+                    "Validate the alert source and original telemetry",
+                    "Confirm whether the indicators map to a currently affected user or host",
+                    "Correlate the inbound indicators with any surrounding authentication or endpoint activity",
+                ],
+                "notable_entities": [item for item in [user, host, source_ip] if item and item not in {"unknown-user", "unknown-host", "unknown-ip"}],
+                "investigation_summary": (
+                    "This alert was ingested from a live external source instead of the mock generator, which means the "
+                    "case should be validated against the original telemetry and any enrichment evidence before response."
+                ),
+                "supporting_evidence": supporting_evidence,
+                "action_type": action_type,
+                "proposed_action": proposed_action,
+                "operator_brief": (
+                    "The response remains human-gated, but this case now reflects a real inbound event with optional "
+                    "external reputation context instead of synthetic demo data."
+                ),
+                "pre_approval_checklist": [
+                    "Verify the alert origin and timestamp against the upstream system",
+                    "Confirm the indicator is not an internal scanner or known benign service",
+                    "Retain the original event payload for audit and response tracking",
+                ],
+            }
+
+        if scenario_id == "impossible_travel":
+            locations = raw_alert.get("locations", ["unknown-location-a", "unknown-location-b"])
+            return {
                 "severity": "High",
                 "risk_score": 86,
                 "confidence_score": 82,
@@ -468,11 +1105,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Review session revocation and impossible travel suppression history",
                     f"Confirm whether {user} had any approved travel or VPN exception",
                 ],
-                "notable_entities": [user, source_ip, raw_alert["locations"][0], raw_alert["locations"][1]],
+                "notable_entities": [user, source_ip, locations[0], locations[1]],
                 "investigation_summary": (
-                    f"{user} authenticated from {raw_alert['locations'][0]} and {raw_alert['locations'][1]} within "
-                    "minutes, making normal travel improbable. No business context is attached to the alert, so the "
-                    "activity should be treated as likely credential misuse until the session history is verified."
+                    f"{user} authenticated from {locations[0]} and {locations[1]} within minutes, making normal "
+                    "travel improbable. No business context is attached to the alert, so the activity should be "
+                    "treated as likely credential misuse until the session history is verified."
                 ),
                 "supporting_evidence": [
                     "Two distant successful logins occurred inside the same identity timeline",
@@ -493,8 +1130,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Check for other high-risk sign-ins tied to the same user in the last 24 hours",
                     "Ensure the identity team is ready to handle user re-verification",
                 ],
-            },
-            "ransomware_behavior": {
+            }
+
+        if scenario_id == "ransomware_behavior":
+            process_name = raw_alert.get("process_name", "unknown-process")
+            return {
                 "severity": "Critical",
                 "risk_score": 98,
                 "confidence_score": 96,
@@ -508,11 +1148,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Determine if the encryption process spawned from a user context or remote tool",
                     "Validate whether backup or EDR tampering occurred before encryption",
                 ],
-                "notable_entities": [host, user, raw_alert["process_name"]],
+                "notable_entities": [host, user, process_name],
                 "investigation_summary": (
-                    f"{host} is exhibiting mass file rename and encryption activity from {raw_alert['process_name']}, "
-                    "which aligns strongly with ransomware tradecraft. Because the activity is already in the impact "
-                    "phase, containment speed matters more than perfect attribution."
+                    f"{host} is exhibiting mass file rename and encryption activity from {process_name}, which aligns "
+                    "strongly with ransomware tradecraft. Because the activity is already in the impact phase, "
+                    "containment speed matters more than perfect attribution."
                 ),
                 "supporting_evidence": [
                     "EDR observed rapid sequential file modifications with encrypted extensions",
@@ -533,8 +1173,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Confirm whether the host has active server connections that need controlled shutdown",
                     "Snapshot volatile evidence if the EDR platform supports it without delaying containment",
                 ],
-            },
-            "brute_force": {
+            }
+
+        if scenario_id == "brute_force":
+            failed_login_count = raw_alert.get("failed_login_count", 0)
+            return {
                 "severity": "Medium",
                 "risk_score": 68,
                 "confidence_score": 74,
@@ -548,11 +1191,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Review whether the source IP appears in any threat intelligence or deny lists",
                     "Determine whether other privileged accounts were targeted in the same window",
                 ],
-                "notable_entities": [user, source_ip, str(raw_alert["failed_login_count"])],
+                "notable_entities": [user, source_ip, str(failed_login_count)],
                 "investigation_summary": (
-                    f"The alert shows {raw_alert['failed_login_count']} failed sign-in attempts against {user} from "
-                    f"{source_ip}, which is above normal error rates and suggests deliberate password guessing. The "
-                    "case should stay open until we confirm there was no eventual success from the same source."
+                    f"The alert shows {failed_login_count} failed sign-in attempts against {user} from {source_ip}, "
+                    "which is above normal error rates and suggests deliberate password guessing. The case should stay "
+                    "open until we confirm there was no eventual success from the same source."
                 ),
                 "supporting_evidence": [
                     "The failed attempts cluster tightly in time from a single origin",
@@ -573,8 +1216,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Check whether the account is tied to an automation job that would be disrupted",
                     "Verify lockout thresholds will not create a broader availability issue",
                 ],
-            },
-            "suspicious_powershell": {
+            }
+
+        if scenario_id == "suspicious_powershell":
+            payload_domain = raw_alert.get("payload_domain", "unknown-domain")
+            return {
                 "severity": "High",
                 "risk_score": 84,
                 "confidence_score": 79,
@@ -588,11 +1234,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Check whether the downloaded payload was written to disk or injected in memory",
                     f"Assess whether {host} initiated any suspicious outbound connections after execution",
                 ],
-                "notable_entities": [host, user, raw_alert["payload_domain"]],
+                "notable_entities": [host, user, payload_domain],
                 "investigation_summary": (
                     f"{host} executed an encoded PowerShell command under {user}, followed by traffic to "
-                    f"{raw_alert['payload_domain']}. The sequence is consistent with staged malware delivery and "
-                    "warrants rapid scoping before the host pivots further into the environment."
+                    f"{payload_domain}. The sequence is consistent with staged malware delivery and warrants rapid "
+                    "scoping before the host pivots further into the environment."
                 ),
                 "supporting_evidence": [
                     "The command line contains base64-encoded arguments",
@@ -601,8 +1247,8 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                 ],
                 "action_type": "Host Isolation",
                 "proposed_action": (
-                    f"Isolate {host}, block the domain {raw_alert['payload_domain']} at the proxy, and suspend "
-                    f"{user}'s active session pending review."
+                    f"Isolate {host}, block the domain {payload_domain} at the proxy, and suspend {user}'s active "
+                    "session pending review."
                 ),
                 "operator_brief": (
                     "This contains both the suspected compromised endpoint and the command-and-control channel while "
@@ -613,8 +1259,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Capture the command line and parent process details for later triage",
                     "Confirm whether the user is currently on a support call performing legitimate remediation",
                 ],
-            },
-            "data_exfiltration": {
+            }
+
+        if scenario_id == "data_exfiltration":
+            data_volume = raw_alert.get("data_volume", "unknown-volume")
+            return {
                 "severity": "Critical",
                 "risk_score": 94,
                 "confidence_score": 88,
@@ -628,11 +1277,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Confirm whether the destination is an approved partner or shadow IT service",
                     f"Scope any other outbound transfers from {host} in the same period",
                 ],
-                "notable_entities": [user, host, source_ip, raw_alert["data_volume"]],
+                "notable_entities": [user, host, source_ip, data_volume],
                 "investigation_summary": (
-                    f"{user} initiated an outbound transfer of {raw_alert['data_volume']} from {host} to an "
-                    f"unapproved destination at {source_ip}. The size and direction of the flow exceed the profile "
-                    "for routine SaaS use, making suspected exfiltration the leading hypothesis."
+                    f"{user} initiated an outbound transfer of {data_volume} from {host} to an unapproved "
+                    f"destination at {source_ip}. The size and direction of the flow exceed the profile for routine "
+                    "SaaS use, making suspected exfiltration the leading hypothesis."
                 ),
                 "supporting_evidence": [
                     "Outbound volume is materially above the user's established baseline",
@@ -653,8 +1302,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Coordinate with the data owner before revoking repository access if the user is business critical",
                     "Preserve netflow or proxy evidence for the full transfer timeline",
                 ],
-            },
-            "privilege_escalation": {
+            }
+
+        if scenario_id == "privilege_escalation":
+            group_name = raw_alert.get("group_name", "unknown-group")
+            return {
                 "severity": "High",
                 "risk_score": 81,
                 "confidence_score": 77,
@@ -668,11 +1320,11 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Validate who performed the group change and from which workstation",
                     f"Review any privileged actions executed by {user} after the elevation",
                 ],
-                "notable_entities": [user, host, raw_alert["group_name"]],
+                "notable_entities": [user, host, group_name],
                 "investigation_summary": (
-                    f"{user} was added to {raw_alert['group_name']} from {host} without embedded change context. The "
-                    "event could be legitimate administration, but the lack of a ticket reference means we should "
-                    "treat it as suspicious until the actor and purpose are verified."
+                    f"{user} was added to {group_name} from {host} without embedded change context. The event could "
+                    "be legitimate administration, but the lack of a ticket reference means we should treat it as "
+                    "suspicious until the actor and purpose are verified."
                 ),
                 "supporting_evidence": [
                     "Privileged group membership changed outside the normal approval trail",
@@ -681,8 +1333,8 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                 ],
                 "action_type": "Privilege Revocation",
                 "proposed_action": (
-                    f"Temporarily remove {user} from {raw_alert['group_name']}, keep {host} under heightened "
-                    "monitoring, and require change owner validation before restoring privileges."
+                    f"Temporarily remove {user} from {group_name}, keep {host} under heightened monitoring, and "
+                    "require change owner validation before restoring privileges."
                 ),
                 "operator_brief": (
                     "Temporary privilege rollback reduces risk quickly while keeping the response reversible if the "
@@ -693,10 +1345,9 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                     "Check whether removing the role would break production support obligations",
                     "Identify the administrator who performed the change for verbal validation",
                 ],
-            },
-        }
+            }
 
-        return profiles[scenario_id]
+        raise ValueError(f"Unsupported scenario_id: {scenario_id}")
 
     def _fallback_manager(self, raw_alert: dict[str, Any]) -> ManagerDecision:
         profile = self._scenario_profile(raw_alert)
@@ -950,35 +1601,135 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+def current_user_from_request(request: Request) -> Optional[UserIdentity]:
+    token = request.cookies.get("soc_session")
+    if not token:
+        return None
+    return soc_service.verify_session_token(token)
+
+
+def require_user(request: Request) -> UserIdentity:
+    user = current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user
+
+
+def require_governor(request: Request) -> UserIdentity:
+    user = require_user(request)
+    if user.role not in {"governor", "admin"}:
+        raise HTTPException(status_code=403, detail="Governor approval role required.")
+    return user
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
+    user = current_user_from_request(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
     bootstrap_json = json.dumps(soc_service.frontend_bootstrap())
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "bootstrap_json": bootstrap_json},
+        {"bootstrap_json": bootstrap_json, "current_user": user.model_dump()},
     )
 
 
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "login.html", {"login_error": None})
+
+
+@app.post("/login")
+async def login(request: Request) -> RedirectResponse:
+    try:
+        form = await request.form()
+    except Exception as exc:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "login_error": (
+                    "Login form parsing failed. Make sure `python-multipart` is installed, "
+                    "then restart the server."
+                )
+            },
+            status_code=500,
+        )
+
+    try:
+        payload = LoginRequest(
+            username=str(form.get("username", "")).strip(),
+            password=str(form.get("password", "")),
+        )
+    except ValidationError:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"login_error": "Username or password format is invalid."},
+            status_code=400,
+        )
+
+    user = soc_service.authenticate_user(payload.username, payload.password)
+    if not user:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"login_error": "Invalid username or password."},
+            status_code=401,
+        )
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie("soc_session", soc_service.issue_session_token(user.username, user.role), httponly=True, samesite="lax")
+    return response
+
+
+@app.post("/logout")
+async def logout() -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie("soc_session")
+    return response
+
+
+@app.get("/api/me", response_model=UserIdentity)
+async def get_me(request: Request) -> UserIdentity:
+    return require_user(request)
+
+
 @app.get("/api/status", response_model=RuntimeStatus)
-async def get_status() -> RuntimeStatus:
+async def get_status(request: Request) -> RuntimeStatus:
+    require_user(request)
     print("[API] /api/status requested")
     return soc_service.runtime_status()
 
 
 @app.get("/api/alerts", response_model=list[AlertRecord])
-async def list_alerts() -> list[AlertRecord]:
+async def list_alerts(request: Request) -> list[AlertRecord]:
+    require_user(request)
     print("[API] /api/alerts requested")
     return await soc_service.list_alerts()
 
 
 @app.post("/api/alerts/generate", response_model=AlertRecord)
-async def generate_alert() -> AlertRecord:
+async def generate_alert(request: Request) -> AlertRecord:
+    require_user(request)
     print("[API] /api/alerts/generate requested")
     return await soc_service.generate_and_store_alert("manual")
 
 
+@app.post("/api/ingest/webhook", response_model=AlertRecord)
+async def ingest_webhook_alert(
+    request: Request,
+    payload: WebhookIngestRequest,
+) -> AlertRecord:
+    print("[API] /api/ingest/webhook requested")
+    raw_body = await request.body()
+    signature = request.headers.get("X-Signature")
+    return await soc_service.ingest_external_alert(payload, raw_body, signature)
+
+
 @app.get("/api/alerts/{alert_id}", response_model=AlertRecord)
-async def get_alert(alert_id: str) -> AlertRecord:
+async def get_alert(alert_id: str, request: Request) -> AlertRecord:
+    require_user(request)
     print(f"[API] /api/alerts/{alert_id} requested")
     try:
         return await soc_service.get_alert(alert_id)
@@ -987,9 +1738,10 @@ async def get_alert(alert_id: str) -> AlertRecord:
 
 
 @app.post("/api/alerts/{alert_id}/decision", response_model=AlertRecord)
-async def record_decision(alert_id: str, payload: DecisionRequest) -> AlertRecord:
+async def record_decision(alert_id: str, payload: DecisionRequest, request: Request) -> AlertRecord:
+    actor = require_governor(request)
     print(f"[API] /api/alerts/{alert_id}/decision requested with decision={payload.decision}")
     try:
-        return await soc_service.record_decision(alert_id, payload)
+        return await soc_service.record_decision(alert_id, payload, actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Alert not found.") from exc

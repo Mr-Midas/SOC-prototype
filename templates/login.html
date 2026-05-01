@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <script>
+        window.tailwind = { config: { theme: { extend: { fontFamily: {
+            display: ["Orbitron", "Share Tech Mono", "monospace"],
+            mono: ["JetBrains Mono", "monospace"],
+            accent: ["Share Tech Mono", "monospace"],
+        }}}}};
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body class="min-h-screen bg-background text-foreground font-mono">
+    <div class="cyber-grid"></div>
+    <div class="scanline-overlay"></div>
+    <div class="noise-overlay"></div>
+    <div class="relative z-10 flex min-h-screen items-center justify-center px-4">
+        <section class="cyber-shell w-full max-w-xl p-8">
+            <div class="section-kicker">Authenticated Access</div>
+            <h1 class="font-display text-4xl font-black uppercase tracking-[0.14em] text-foreground">SOC Operator Login</h1>
+            <p class="mt-4 text-sm leading-7 text-slate-400">
+                Sign in with a local challenge account to access stored incidents, approvals, and queued response actions.
+            </p>
+            {% if login_error %}
+            <div class="mt-5 border border-destructive/40 bg-destructive/10 p-4 text-sm text-rose-300">
+                {{ login_error }}
+            </div>
+            {% endif %}
+            <form action="/login" method="post" class="mt-6 space-y-5">
+                <div>
+                    <label class="subpanel-label">Username</label>
+                    <input class="operator-note mt-2 min-h-0 py-3 text-foreground" type="text" name="username" placeholder="admin" required>
+                </div>
+                <div>
+                    <label class="subpanel-label">Password</label>
+                    <input class="operator-note mt-2 min-h-0 py-3 text-foreground" type="password" name="password" placeholder="ChangeMe123!" required>
+                </div>
+                <button class="cyber-button cyber-button-primary w-full">Login</button>
+            </form>
+            <div class="mt-6 text-xs font-accent uppercase tracking-[0.18em] text-slate-500">
+                Default users are seeded from environment variables.
+            </div>
+        </section>
+    </div>
+</body>
+</html>

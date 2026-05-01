@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Security Operations Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@500;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <script>
+        window.tailwind = {
+            config: {
+                theme: {
+                    extend: {
+                        fontFamily: {
+                            display: ["Orbitron", "Share Tech Mono", "monospace"],
+                            mono: ["JetBrains Mono", "Fira Code", "Consolas", "monospace"],
+                            accent: ["Share Tech Mono", "monospace"],
+                        },
+                        colors: {
+                            background: "#0a0a0f",
+                            foreground: "#e0e0e0",
+                            card: "#12121a",
+                            muted: "#1c1c2e",
+                            mutedForeground: "#6b7280",
+                            accent: "#00ff88",
+                            accentSecondary: "#ff00ff",
+                            accentTertiary: "#00d4ff",
+                            border: "#2a2a3a",
+                            input: "#12121a",
+                            ring: "#00ff88",
+                            destructive: "#ff3366",
+                        },
+                    },
+                },
+            },
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body class="min-h-screen bg-background text-foreground font-mono">
+    <div class="cyber-grid"></div>
+    <div class="scanline-overlay"></div>
+    <div class="noise-overlay"></div>
+    <div class="scan-beam"></div>
+
+    <div class="relative z-10 mx-auto min-h-screen max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div class="mb-4 flex flex-col gap-3 border border-border bg-card/80 px-4 py-3 text-xs font-accent uppercase tracking-[0.18em] text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex flex-wrap items-center gap-3">
+                <span>User: {{ current_user.username }}</span>
+                <span>Role: {{ current_user.role }}</span>
+            </div>
+            <form action="/logout" method="post">
+                <button class="cyber-button cyber-button-outline w-full sm:w-auto">Logout</button>
+            </form>
+        </div>
+
+        <header class="cyber-shell hero-shell overflow-hidden px-6 py-6 lg:px-8">
+            <div class="hero-circuit"></div>
+            <div class="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
+                <div class="max-w-3xl">
+                    <div class="terminal-kicker">
+                        <span class="terminal-prompt">></span>
+                        Tier 4 Governor Console
+                    </div>
+                    <h1 class="cyber-glitch mt-5 font-display text-5xl font-black uppercase tracking-[0.18em] text-foreground sm:text-6xl xl:text-7xl" data-text="Agentic Security Operations Center">
+                        Agentic Security Operations Center
+                    </h1>
+                    <p class="type-line mt-5 max-w-2xl text-base leading-8 text-slate-300 sm:text-lg">
+                        Live triage. Transparent agent reasoning. Human-governed containment for a 24/7 defensive command surface.
+                    </p>
+                </div>
+
+                <div class="hud-grid">
+                    <article class="hud-card">
+                        <div class="hud-label">Inference Mode</div>
+                        <div id="mode-badge" class="hud-value">Loading</div>
+                    </article>
+                    <article class="hud-card">
+                        <div class="hud-label">Provider / Model</div>
+                        <div id="model-badge" class="hud-value">Loading</div>
+                    </article>
+                    <article class="hud-card">
+                        <div class="hud-label">Alert Interval</div>
+                        <div id="interval-badge" class="hud-value">Loading</div>
+                    </article>
+                </div>
+            </div>
+        </header>
+
+        <section class="mt-6 grid gap-4 md:grid-cols-3">
+            <article class="cyber-shell stat-panel stat-panel-accent p-5">
+                <div class="stat-label">Open Cases</div>
+                <div id="open-count" class="stat-value">0</div>
+                <p class="stat-copy">Alerts waiting for final operator judgment.</p>
+            </article>
+            <article class="cyber-shell stat-panel stat-panel-danger p-5">
+                <div class="stat-label">Critical Exposure</div>
+                <div id="critical-count" class="stat-value text-destructive">0</div>
+                <p class="stat-copy">High-impact alerts that should be examined first.</p>
+            </article>
+            <article class="cyber-shell stat-panel stat-panel-cyan p-5">
+                <div class="stat-label">Approved Actions</div>
+                <div id="approved-count" class="stat-value text-accentTertiary">0</div>
+                <p class="stat-copy">Human-cleared responses queued for orchestration.</p>
+            </article>
+        </section>
+
+        <main class="mt-6 grid gap-6 xl:grid-cols-[1.04fr_0.96fr]">
+            <section class="cyber-shell terminal-shell p-5">
+                <div class="panel-header flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <div class="section-kicker">Alert Intake</div>
+                        <h2 class="font-display text-3xl font-bold uppercase tracking-[0.12em] text-foreground">Live Alert Feed</h2>
+                        <p class="mt-2 max-w-xl text-sm leading-7 text-slate-400">
+                            Mock SIEM events stream into the queue, get scored by the manager, and surface here for operator review.
+                        </p>
+                    </div>
+
+                    <div class="flex flex-col gap-3 sm:flex-row">
+                        <button id="refresh-button" class="cyber-button cyber-button-outline">
+                            Refresh Feed
+                        </button>
+                        <button id="generate-button" class="cyber-button cyber-button-primary cyber-glitch-button" data-text="Generate Alert">
+                            Generate Alert
+                        </button>
+                    </div>
+                </div>
+
+                <div id="feed-empty" class="hidden py-14 text-center text-sm text-slate-400">
+                    No alerts available yet.
+                </div>
+                <div id="alert-feed" class="mt-5 space-y-4"></div>
+            </section>
+
+            <aside id="detail-panel" class="cyber-shell analysis-shell p-5">
+                <div id="detail-empty" class="flex min-h-[560px] flex-col items-center justify-center text-center">
+                    <div class="empty-terminal-icon">
+                        <span>[ ]</span>
+                    </div>
+                    <h2 class="mt-5 font-display text-3xl font-bold uppercase tracking-[0.12em] text-foreground">Reasoning Log Ready</h2>
+                    <p class="mt-4 max-w-md text-base leading-8 text-slate-400">
+                        Select an alert to inspect the manager verdict, triage rationale, and recommended containment chain.
+                    </p>
+                </div>
+
+                <div id="detail-content" class="hidden">
+                    <div class="border-b border-border pb-5">
+                        <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                            <div class="max-w-2xl">
+                                <div id="detail-severity" class="severity-pill">Low</div>
+                                <h2 id="detail-title" class="mt-4 font-display text-3xl font-bold uppercase leading-tight tracking-[0.1em] text-foreground"></h2>
+                                <p id="detail-summary" class="mt-4 text-base leading-8 text-slate-300"></p>
+                            </div>
+                            <div class="governor-badge-box">
+                                <div class="governor-label">Governor Status</div>
+                                <div id="detail-governor" class="governor-value"></div>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 grid gap-4 md:grid-cols-2">
+                            <div class="subpanel">
+                                <div class="subpanel-label">Risk Score</div>
+                                <div class="mt-3 flex items-center justify-between text-sm text-foreground">
+                                    <span>Manager Assessment</span>
+                                    <span id="detail-risk-score">0</span>
+                                </div>
+                                <div class="score-bar"><span id="risk-bar-fill"></span></div>
+                            </div>
+                            <div class="subpanel">
+                                <div class="subpanel-label">Confidence Score</div>
+                                <div class="mt-3 flex items-center justify-between text-sm text-foreground">
+                                    <span>Triage Confidence</span>
+                                    <span id="detail-confidence-score">0</span>
+                                </div>
+                                <div class="score-bar"><span id="confidence-bar-fill"></span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-5">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <div class="section-kicker">Step Trace</div>
+                                <h3 class="font-display text-2xl font-bold uppercase tracking-[0.12em] text-foreground">Agentic Reasoning Log</h3>
+                            </div>
+                            <div id="detail-created-at" class="timestamp-readout"></div>
+                        </div>
+                        <div id="reasoning-log" class="mt-4 space-y-4"></div>
+                    </div>
+
+                    <div class="mt-5 grid gap-4 md:grid-cols-2">
+                        <div class="subpanel">
+                            <div class="subpanel-label">Telemetry</div>
+                            <div id="telemetry-list" class="mt-4 space-y-3"></div>
+                        </div>
+                        <div class="subpanel">
+                            <div class="subpanel-label">Indicators</div>
+                            <div id="indicator-list" class="mt-4 flex flex-wrap gap-2"></div>
+                        </div>
+                    </div>
+
+                    <div class="containment-shell mt-5 p-5">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div class="max-w-2xl">
+                                <div class="section-kicker text-accent">Containment Proposal</div>
+                                <div id="proposed-action" class="mt-3 text-base leading-8 text-foreground"></div>
+                            </div>
+                            <div class="approval-chip">Human Approval Required</div>
+                        </div>
+
+                        <label for="operator-note" class="mt-5 block text-xs font-accent uppercase tracking-[0.22em] text-slate-400">
+                            Operator Note
+                        </label>
+                        <textarea id="operator-note" rows="3" class="operator-note" placeholder="> annotate rationale or override decision"></textarea>
+
+                        <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                            <button id="approve-button" class="cyber-button cyber-button-primary">Approve Action</button>
+                            <button id="reject-button" class="cyber-button cyber-button-secondary">Reject Action</button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script id="soc-bootstrap-data" type="application/json">
+        {{ bootstrap_json | tojson }}
+    </script>
+    <script>
+        try {
+            window.SOC_BOOTSTRAP = JSON.parse(document.getElementById("soc-bootstrap-data").textContent);
+        } catch (e) {
+            console.error("Failed to parse SOC_BOOTSTRAP:", e);
+            window.SOC_BOOTSTRAP = {};
+        }
+    </script>
+    <script src="/static/js/app.js" defer></script>
+</body>
+</html>
