@@ -20,7 +20,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 5. Set up environment (copy defaults)
-Copy-Item .env.example .env
+copy .env.example .env
 
 # 6. Start the app (uses SQLite fallback, no Postgres required for dev)
 uvicorn copilot_soc.main:app --reload
