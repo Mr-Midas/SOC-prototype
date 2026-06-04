@@ -1,0 +1,74 @@
+<!--
+  Focused Sysmon config for Endpoint SOC Copilot.
+  Install (Admin PowerShell):
+    sysmon64.exe -accepteula -i sysmon-config.xml
+  Update:
+    sysmon64.exe -c sysmon-config.xml
+-->
+<Sysmon schemaversion="4.90">
+  <HashAlgorithms>sha256,IMPHASH</HashAlgorithms>
+  <EventFiltering>
+
+  <!-- Process creation: core signal for suspicious execution -->
+  <RuleGroup name="ProcessCreate" groupRelation="or">
+    <ProcessCreate onmatch="exclude">
+      <Image condition="end with">\RuntimeBroker.exe</Image>
+      <Image condition="end with">\SearchHost.exe</Image>
+      <Image condition="end with">\MsMpEng.exe</Image>
+      <ParentImage condition="end with">\services.exe</ParentImage>
+    </ProcessCreate>
+  </RuleGroup>
+
+  <!-- Network connections: outbound C2 / exfil patterns -->
+  <RuleGroup name="NetworkConnect" groupRelation="or">
+    <NetworkConnect onmatch="exclude">
+      <Image condition="end with">\chrome.exe</Image>
+      <Image condition="end with">\msedge.exe</Image>
+      <Image condition="end with">\firefox.exe</Image>
+      <DestinationIp condition="is">127.0.0.1</DestinationIp>
+      <DestinationIp condition="begin with">10.</DestinationIp>
+      <DestinationIp condition="begin with">192.168.</DestinationIp>
+    </NetworkConnect>
+  </RuleGroup>
+
+  <!-- LSASS / credential access patterns -->
+  <ProcessAccess onmatch="include">
+    <TargetImage condition="end with">\lsass.exe</TargetImage>
+    <GrantedAccess condition="contains">0x1010</GrantedAccess>
+    <GrantedAccess condition="contains">0x1410</GrantedAccess>
+  </ProcessAccess>
+
+  <!-- Dropped binaries in user-writable locations -->
+  <FileCreate onmatch="include">
+    <TargetFilename condition="contains">\Users\</TargetFilename>
+    <TargetFilename condition="end with">.exe</TargetFilename>
+  </FileCreate>
+  <FileCreate onmatch="include">
+    <TargetFilename condition="contains">\AppData\Local\Temp\</TargetFilename>
+  </FileCreate>
+  <FileCreate onmatch="include">
+    <TargetFilename condition="contains">\ProgramData\</TargetFilename>
+    <TargetFilename condition="end with">.dll</TargetFilename>
+  </FileCreate>
+
+  <!-- DNS: new/unusual domains (collector filters common vendor noise) -->
+  <DnsQuery onmatch="exclude">
+    <QueryName condition="end with">.microsoft.com</QueryName>
+    <QueryName condition="end with">.windows.com</QueryName>
+    <QueryName condition="end with">.office.com</QueryName>
+    <QueryName condition="end with">.live.com</QueryName>
+  </DnsQuery>
+
+  <!-- Ransomware-style file activity -->
+  <FileDelete onmatch="include">
+    <TargetFilename condition="contains">\Users\</TargetFilename>
+  </FileDelete>
+  <FileDeleteDetected onmatch="include">
+    <TargetFilename condition="contains">\Users\</TargetFilename>
+  </FileDeleteDetected>
+
+  <!-- Process tampering / hollowing indicators -->
+  <ProcessTampering onmatch="include" />
+
+  </EventFiltering>
+</Sysmon>

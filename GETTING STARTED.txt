@@ -1,0 +1,70 @@
+ENDPOINT SOC COPILOT - GETTING STARTED (5 MINUTES)
+=================================================
+
+WHAT THIS DOES
+--------------
+This app watches your computer for suspicious activity, explains alerts in plain
+English, and lets YOU approve any response before anything dangerous happens.
+
+
+STEP 1 - INSTALL (ONE TIME)
+---------------------------
+1) Install Python 3.11+ from python.org (check "Add python.exe to PATH")
+2) Double-click: Install.bat
+3) Wait until it says "Setup complete"
+
+
+STEP 2 - START THE APP
+----------------------
+Double-click: Start Endpoint SOC Copilot.bat
+
+Your browser opens automatically.
+Login:
+  Username: admin
+  Password: ChangeMe123!
+
+
+STEP 3 - TURN ON PROTECTION (GUI TOGGLES)
+-----------------------------------------
+Click "Open Control Panel" (or go to Settings in the app)
+
+Recommended switches:
+  [ON]  Watch This Computer
+  [ON]  Safe Mode
+  [OFF] Practice Sample Alerts (after you finish learning)
+
+Optional:
+  [ON]  Use AI Explanations (uses local Ollama or your API key)
+  [ON]  Check IPs Online (only if you added API keys in .env)
+
+
+STEP 4 - OPTIONAL: BETTER DETECTION (SYSMON)
+--------------------------------------------
+For stronger monitoring, install Sysmon once (Admin PowerShell):
+
+  sysmon64.exe -accepteula -i sysmon-config.xml
+
+Then restart the app.
+
+
+WHAT YOU DO NOT NEED TO RUN
+---------------------------
+- collector.py (built into the app now)
+- manual curl commands
+- terminal scripts
+
+
+TROUBLESHOOTING
+---------------
+- "No alerts yet" -> Turn ON "Watch This Computer" in Control Panel
+- Login fails -> use admin / ChangeMe123!
+- Still stuck -> run Install.bat again, then Start Endpoint SOC Copilot.bat
+
+
+TO SELL / SHIP AS ZIP
+---------------------
+Zip this entire folder. Customer runs:
+  1) Install.bat
+  2) Start Endpoint SOC Copilot.bat
+
+Later you can wrap launcher.py into a single .exe with PyInstaller.

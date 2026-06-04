@@ -1,6 +1,6 @@
-# Agentic Security Operations Center
+# Endpoint SOC Copilot
 
-A polished FastAPI prototype for a coding challenge that simulates a manager-worker SOC. The app generates realistic security alerts, routes them through AI-driven triage, and keeps the final containment decision in human hands.
+A FastAPI prototype focused on single-endpoint security operations. It ingests endpoint events, applies rules-first triage, selectively uses AI on higher-risk incidents, and keeps final containment decisions in human hands.
 
 ## Directory Structure
 
@@ -22,8 +22,9 @@ A polished FastAPI prototype for a coding challenge that simulates a manager-wor
 
 ## Features
 
-- Mock SIEM alert generation through both a startup seed and manual button-driven creation
+- Manual sample endpoint event generation for safe UI testing
 - Real webhook ingestion endpoint for live alerts: `/api/ingest/webhook`
+- Endpoint-native ingestion endpoint for local agents/scripts: `/api/ingest/endpoint-event`
 - Optional free threat-intelligence enrichment with AbuseIPDB and AlienVault OTX
 - SQLite persistence for incidents, approvals, users, and queued actions
 - Local authentication with seeded operator accounts and role-gated governor approvals
@@ -33,7 +34,7 @@ A polished FastAPI prototype for a coding challenge that simulates a manager-wor
 - Containment Worker that proposes a human-reviewable response action
 - Transparent reasoning log for every agent stage
 - Tier 4 Governor approval or rejection workflow
-- Live OpenAI mode with deterministic fallback behavior when no API key is configured
+- Live AI mode with deterministic fallback behavior and token guardrails (`MIN_RISK_FOR_AI`)
 
 ## Quick Start
 
@@ -119,6 +120,36 @@ Change those immediately in `.env` for any shared environment.
 - Set `AI_PROVIDER=openai` to use the OpenAI Responses API path.
 - Set `AI_PROVIDER=ollama` to use a local model for more reliable 24/7 operation when public hosted APIs are rate-limited or unavailable.
 - If the configured API key is missing or the SDK call fails, the workflow falls back to deterministic local logic so the demo remains fully usable.
+
+## Local Windows Collector
+
+Use `collector.py` to tail Sysmon + Security logs and POST suspicious events to:
+
+```text
+POST /api/ingest/endpoint-event
+```
+
+1. Install Sysmon and apply the included config:
+
+   ```powershell
+   sysmon64.exe -accepteula -i sysmon-config.xml
+   ```
+
+2. Set matching secrets in `.env`:
+
+   ```env
+   WEBHOOK_SHARED_SECRET=change-this-webhook-secret
+   COLLECTOR_ENDPOINT=http://127.0.0.1:8000/api/ingest/endpoint-event
+   ```
+
+3. Run the collector (Admin recommended for Security log access):
+
+   ```powershell
+   python collector.py --dry-run --once
+   python collector.py
+   ```
+
+The collector deduplicates events locally, filters noisy browser traffic, and signs each POST with `X-Signature: sha256=<hmac>`.
 
 ## Real Alert Ingestion
 

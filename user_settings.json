@@ -1,0 +1,8 @@
+{
+  "monitor_windows_events": true,
+  "use_ai_triage": true,
+  "threat_intel_enabled": false,
+  "sample_events_enabled": true,
+  "safe_mode": true,
+  "collector_interval_seconds": 30
+}

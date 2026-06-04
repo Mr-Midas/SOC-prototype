@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import json
 import os
+import platform
 import random
 import secrets
 import sqlite3
@@ -24,6 +25,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
+
+from settings_store import SettingsStore, UserSettings
 
 OPENAI_IMPORT_ERROR: Optional[Exception] = None
 
@@ -110,6 +113,7 @@ class RuntimeStatus(BaseModel):
     auto_generate: bool
     generation_interval_seconds: int
     max_alerts: int
+    min_risk_for_ai: int
 
 
 class WebhookIngestRequest(BaseModel):
@@ -127,6 +131,20 @@ class WebhookIngestRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class EndpointEventIngestRequest(BaseModel):
+    host_id: str = Field(min_length=2, max_length=120)
+    event_type: str = Field(min_length=3, max_length=120)
+    summary: str = Field(min_length=10, max_length=600)
+    severity_hint: Optional[SeverityLevel] = None
+    username: Optional[str] = Field(default=None, max_length=120)
+    source_ip: Optional[str] = Field(default=None, max_length=80)
+    process_name: Optional[str] = Field(default=None, max_length=160)
+    command_line: Optional[str] = Field(default=None, max_length=500)
+    indicators: list[str] = Field(default_factory=list, max_length=25)
+    telemetry: list[str] = Field(default_factory=list, max_length=25)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=8, max_length=200)
@@ -135,6 +153,22 @@ class LoginRequest(BaseModel):
 class UserIdentity(BaseModel):
     username: str
     role: Literal["analyst", "governor", "admin"]
+
+
+class SettingsUpdateRequest(BaseModel):
+    monitor_windows_events: Optional[bool] = None
+    use_ai_triage: Optional[bool] = None
+    threat_intel_enabled: Optional[bool] = None
+    sample_events_enabled: Optional[bool] = None
+    safe_mode: Optional[bool] = None
+    collector_interval_seconds: Optional[int] = Field(default=None, ge=10, le=300)
+
+
+class SettingsView(BaseModel):
+    settings: UserSettings
+    collector_status: dict[str, Any]
+    platform: str
+    is_windows: bool
 
 
 def utc_now() -> datetime:
@@ -306,20 +340,31 @@ class AgenticSOCService:
         self.db = DatabaseManager(BASE_DIR / "soc.db")
         self.ai_provider = os.getenv("AI_PROVIDER", "ollama").strip().lower()
         self.model = self._resolve_default_model()
-        self.auto_generate = env_flag("ENABLE_AUTO_ALERTS", True)
+        self.auto_generate = env_flag("ENABLE_AUTO_ALERTS", False)
+        self.enable_sample_generation = env_flag("ENABLE_SAMPLE_EVENT_GENERATION", True)
         self.generation_interval_seconds = max(15, int(os.getenv("ALERT_INTERVAL_SECONDS", "45")))
         self.max_alerts = max(10, int(os.getenv("MAX_STORED_ALERTS", "40")))
+        self.min_risk_for_ai = max(0, min(100, int(os.getenv("MIN_RISK_FOR_AI", "70"))))
         self.webhook_shared_secret = os.getenv("WEBHOOK_SHARED_SECRET", "").strip()
         self.session_secret = os.getenv("SESSION_SECRET", "dev-session-secret-change-me").strip()
         self.abuseipdb_api_key = os.getenv("ABUSEIPDB_API_KEY", "").strip()
         self.otx_api_key = os.getenv("OTX_API_KEY", "").strip()
         self.connector_mode = os.getenv("CONNECTOR_MODE", "dry_run").strip().lower()
         self.containment_webhook_url = os.getenv("CONTAINMENT_WEBHOOK_URL", "").strip()
+        self.settings_store = SettingsStore(BASE_DIR / "user_settings.json")
+        self.collector_stats: dict[str, Any] = {
+            "running": False,
+            "last_poll_at": None,
+            "last_forwarded": 0,
+            "last_error": None,
+        }
         self.client = self._build_ai_client()
         self.alerts: list[AlertRecord] = []
         self.lock = asyncio.Lock()
         self.generator_task: Optional[asyncio.Task[None]] = None
         self.queue_task: Optional[asyncio.Task[None]] = None
+        self.collector_task: Optional[asyncio.Task[None]] = None
+        self._apply_settings_from_store()
         self._seed_default_users()
 
     def _resolve_default_model(self) -> str:
@@ -344,6 +389,89 @@ class AgenticSOCService:
         ]
         for username, password, role in defaults:
             self.db.upsert_user(username, self._hash_password(password), role)
+
+    def _apply_settings_from_store(self) -> None:
+        settings = self.settings_store.get()
+        self.enable_sample_generation = settings.sample_events_enabled
+        self.use_ai_triage = settings.use_ai_triage
+        self.threat_intel_enabled = settings.threat_intel_enabled
+        if settings.safe_mode:
+            self.connector_mode = "dry_run"
+        else:
+            self.connector_mode = os.getenv("CONNECTOR_MODE", "dry_run").strip().lower()
+
+    def get_settings_view(self) -> SettingsView:
+        settings = self.settings_store.get()
+        return SettingsView(
+            settings=settings,
+            collector_status=self.collector_stats.copy(),
+            platform=platform.system(),
+            is_windows=platform.system().lower() == "windows",
+        )
+
+    async def update_settings(self, payload: SettingsUpdateRequest) -> SettingsView:
+        updates = {key: value for key, value in payload.model_dump().items() if value is not None}
+        self.settings_store.update(updates)
+        self._apply_settings_from_store()
+        await self._sync_background_tasks()
+        return self.get_settings_view()
+
+    async def _sync_background_tasks(self) -> None:
+        settings = self.settings_store.get()
+        if settings.monitor_windows_events and platform.system().lower() == "windows":
+            if self.collector_task is None:
+                self.collector_task = asyncio.create_task(self._collector_loop())
+        elif self.collector_task is not None:
+            self.collector_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.collector_task
+            self.collector_task = None
+            self.collector_stats["running"] = False
+
+    async def ingest_endpoint_payload(self, payload: dict[str, Any]) -> AlertRecord:
+        normalized_alert = await asyncio.to_thread(self._normalize_endpoint_event, payload)
+        processed_alert = await asyncio.to_thread(self._process_alert, normalized_alert, "endpoint_event")
+        async with self.lock:
+            self.alerts.insert(0, processed_alert)
+            self.alerts = self.alerts[: self.max_alerts]
+            self.db.save_alert(processed_alert)
+        return processed_alert.model_copy(deep=True)
+
+    async def _collector_loop(self) -> None:
+        import collector as collector_module
+
+        self.collector_stats["running"] = True
+        print("[COLLECTOR] Built-in Windows monitor started.")
+        try:
+            while True:
+                settings = self.settings_store.get()
+                if not settings.monitor_windows_events:
+                    await asyncio.sleep(2)
+                    continue
+
+                try:
+                    pending = await asyncio.to_thread(
+                        collector_module.collect_pending_events,
+                        int(os.getenv("COLLECTOR_LOOKBACK_SECONDS", "120")),
+                    )
+                    for event_payload in pending:
+                        await self.ingest_endpoint_payload(event_payload)
+                    self.collector_stats.update(
+                        {
+                            "last_poll_at": utc_now().isoformat(),
+                            "last_forwarded": len(pending),
+                            "last_error": None,
+                        }
+                    )
+                except Exception as exc:
+                    self.collector_stats["last_error"] = str(exc)
+                    print(f"[COLLECTOR] poll failed: {exc}")
+
+                await asyncio.sleep(settings.collector_interval_seconds)
+        except asyncio.CancelledError:
+            self.collector_stats["running"] = False
+            print("[COLLECTOR] Built-in Windows monitor stopped.")
+            raise
 
     def _hash_password(self, password: str) -> str:
         salt = secrets.token_hex(16)
@@ -437,6 +565,7 @@ class AgenticSOCService:
             auto_generate=self.auto_generate,
             generation_interval_seconds=self.generation_interval_seconds,
             max_alerts=self.max_alerts,
+            min_risk_for_ai=self.min_risk_for_ai,
         )
 
     def frontend_bootstrap(self) -> dict[str, Any]:
@@ -448,27 +577,33 @@ class AgenticSOCService:
             "autoGenerate": status.auto_generate,
             "generationIntervalSeconds": status.generation_interval_seconds,
             "maxAlerts": status.max_alerts,
+            "minRiskForAi": status.min_risk_for_ai,
+            "sampleGenerationEnabled": self.enable_sample_generation,
             "realIngestionEnabled": True,
+            "settingsUrl": "/settings",
         }
 
     async def start(self) -> None:
         print("[APP] Starting Agentic SOC service.")
         if not self.alerts:
             self.alerts = self.db.load_alerts(self.max_alerts)
-        if not self.alerts:
-            await self.generate_and_store_alert("startup-seed")
-
         if self.auto_generate and self.generator_task is None:
             self.generator_task = asyncio.create_task(self._generator_loop())
             print(
-                f"[APP] Automatic alert generation enabled every "
+                f"[APP] Automatic sample event generation enabled every "
                 f"{self.generation_interval_seconds} seconds."
             )
         if self.queue_task is None:
             self.queue_task = asyncio.create_task(self._action_queue_loop())
+        await self._sync_background_tasks()
 
     async def stop(self) -> None:
         print("[APP] Stopping Agentic SOC service.")
+        if self.collector_task:
+            self.collector_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.collector_task
+            self.collector_task = None
         if self.generator_task:
             self.generator_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -603,9 +738,9 @@ class AgenticSOCService:
         raise KeyError(alert_id)
 
     async def generate_and_store_alert(self, trigger: str) -> AlertRecord:
-        raw_alert = self._generate_mock_alert()
+        raw_alert = self._generate_sample_endpoint_alert()
         print(
-            f"[SIEM] Generated alert_id={raw_alert['alert_id']} "
+            f"[SAMPLE] Generated alert_id={raw_alert['alert_id']} "
             f"scenario={raw_alert['scenario_id']} trigger={trigger}"
         )
 
@@ -639,10 +774,39 @@ class AgenticSOCService:
 
         return processed_alert.model_copy(deep=True)
 
+    async def ingest_endpoint_event(
+        self,
+        payload: EndpointEventIngestRequest,
+        raw_body: bytes,
+        signature: Optional[str],
+    ) -> AlertRecord:
+        self._validate_webhook_signature(raw_body, signature)
+        normalized_alert = await asyncio.to_thread(self._normalize_endpoint_event, payload.model_dump())
+        print(
+            f"[INGEST] Received endpoint event alert_id={normalized_alert['alert_id']} "
+            f"host={normalized_alert.get('affected_host', 'unknown')} type={payload.event_type}"
+        )
+        processed_alert = await asyncio.to_thread(self._process_alert, normalized_alert, "endpoint_event")
+
+        async with self.lock:
+            self.alerts.insert(0, processed_alert)
+            self.alerts = self.alerts[: self.max_alerts]
+            self.db.save_alert(processed_alert)
+
+        return processed_alert.model_copy(deep=True)
+
     def _process_alert(self, raw_alert: dict[str, Any], trigger: str) -> AlertRecord:
-        manager = self._run_manager_agent(raw_alert)
-        triage = self._run_triage_worker(raw_alert, manager)
-        containment = self._run_containment_worker(raw_alert, manager, triage)
+        manager = self._fallback_manager(raw_alert)
+        ai_used = False
+        if self._should_use_ai(raw_alert, manager):
+            manager = self._run_manager_agent(raw_alert)
+            ai_used = True
+
+        triage = self._fallback_triage(raw_alert, manager)
+        containment = self._fallback_containment(raw_alert, manager, triage)
+        if ai_used:
+            triage = self._run_triage_worker(raw_alert, manager)
+            containment = self._run_containment_worker(raw_alert, manager, triage)
 
         print(
             f"[PIPELINE] alert_id={raw_alert['alert_id']} severity={manager.severity} "
@@ -685,9 +849,30 @@ class AgenticSOCService:
                     summary=containment.operator_brief,
                     output=containment.model_dump(),
                 ),
+                ReasoningStep(
+                    stage="Token Policy",
+                    agent_role="Cost Guardrail",
+                    summary=(
+                        "Live model inference was used for this case."
+                        if ai_used
+                        else "Fallback reasoning was used because the case risk stayed below the AI threshold."
+                    ),
+                    output={
+                        "ai_used": ai_used,
+                        "min_risk_for_ai": self.min_risk_for_ai,
+                        "estimated_risk": manager.risk_score,
+                    },
+                ),
             ],
             raw_alert=raw_alert,
         )
+
+    def _should_use_ai(self, raw_alert: dict[str, Any], fallback_manager: ManagerDecision) -> bool:
+        if not self.client or not getattr(self, "use_ai_triage", True):
+            return False
+        if raw_alert.get("scenario_id") == "endpoint_sample":
+            return False
+        return fallback_manager.risk_score >= self.min_risk_for_ai
 
     def _validate_webhook_signature(self, raw_body: bytes, signature: Optional[str]) -> None:
         if not self.webhook_shared_secret:
@@ -751,6 +936,67 @@ class AgenticSOCService:
             "analyst_supplied_severity": severity,
         }
 
+    def _normalize_endpoint_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_ip = payload.get("source_ip") or None
+        affected_user = payload.get("username") or None
+        affected_host = payload.get("host_id") or None
+        process_name = payload.get("process_name") or None
+        command_line = payload.get("command_line") or None
+        indicators = [str(item) for item in payload.get("indicators", []) if str(item).strip()]
+        telemetry = [str(item) for item in payload.get("telemetry", []) if str(item).strip()]
+        metadata = payload.get("metadata", {})
+        event_type = str(payload.get("event_type", "local_event")).strip().lower().replace(" ", "_")
+        severity = payload.get("severity_hint")
+
+        if source_ip and source_ip not in indicators:
+            indicators.insert(0, source_ip)
+        if affected_user and affected_user not in indicators:
+            indicators.append(affected_user)
+        if affected_host and affected_host not in indicators:
+            indicators.append(affected_host)
+        if process_name and process_name not in indicators:
+            indicators.append(process_name)
+
+        if command_line:
+            telemetry.append(f"Command line: {command_line[:260]}")
+
+        enrichments = self._enrich_indicators(source_ip)
+        enrichment_summary = self._summarize_enrichments(enrichments)
+        if enrichment_summary:
+            telemetry.extend(enrichment_summary)
+
+        if not severity:
+            severity = self._estimate_external_severity(
+                {
+                    "rule_name": payload.get("event_type", ""),
+                    "summary": payload.get("summary", ""),
+                    "telemetry": telemetry,
+                    "indicators": indicators,
+                },
+                enrichments,
+            )
+
+        return {
+            "alert_id": self._new_alert_id(),
+            "generated_at": utc_now().isoformat(),
+            "scenario_id": "endpoint_detection",
+            "source": "Local Endpoint Agent",
+            "rule_name": f"Endpoint Event: {payload['event_type']}",
+            "summary": payload["summary"],
+            "mitre_tactic": "Execution",
+            "affected_user": affected_user,
+            "affected_host": affected_host,
+            "source_ip": source_ip,
+            "process_name": process_name,
+            "command_line": command_line,
+            "event_type": event_type,
+            "indicators": indicators[:25],
+            "telemetry": telemetry[:25],
+            "metadata": metadata,
+            "enrichments": enrichments,
+            "analyst_supplied_severity": severity,
+        }
+
     def _estimate_external_severity(
         self,
         payload: dict[str, Any],
@@ -786,6 +1032,8 @@ class AgenticSOCService:
     def _enrich_indicators(self, source_ip: Optional[str]) -> dict[str, Any]:
         enrichments: dict[str, Any] = {}
         if not source_ip or not self._is_public_ip(source_ip):
+            return enrichments
+        if not getattr(self, "threat_intel_enabled", False):
             return enrichments
 
         if self.abuseipdb_api_key:
@@ -1089,6 +1337,55 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
                 ],
             }
 
+        if scenario_id in {"endpoint_detection", "endpoint_sample"}:
+            analyst_supplied_severity = raw_alert.get("analyst_supplied_severity", "Medium")
+            host = raw_alert.get("affected_host") or host
+            event_type = raw_alert.get("event_type", "endpoint_event")
+            process_name = raw_alert.get("process_name") or "unknown-process"
+            source_label = "sample endpoint event" if scenario_id == "endpoint_sample" else "live endpoint event"
+            confidence = 58 if analyst_supplied_severity == "Low" else 74 if analyst_supplied_severity == "Medium" else 86
+            if "powershell" in event_type or "encoded" in raw_alert.get("summary", "").lower():
+                confidence = min(95, confidence + 6)
+
+            action_type = "Process Containment" if process_name != "unknown-process" else "Host Triage"
+            return {
+                "severity": analyst_supplied_severity,
+                "risk_score": 36 if analyst_supplied_severity == "Low" else 64 if analyst_supplied_severity == "Medium" else 84 if analyst_supplied_severity == "High" else 95,
+                "confidence_score": confidence,
+                "classification": "True Positive" if confidence >= 80 else "Needs More Data",
+                "routing_rationale": (
+                    f"A {source_label} was normalized into a single-endpoint incident format and prioritized using "
+                    "rules-first scoring with optional threat-intelligence enrichment."
+                ),
+                "triage_focus": [
+                    "Verify endpoint event integrity and timestamp alignment",
+                    "Confirm whether behavior matches expected admin or automation activity",
+                    "Check for repeated patterns from the same host or user in the last hour",
+                ],
+                "notable_entities": [item for item in [user, host, source_ip, process_name] if item and item not in {"unknown-user", "unknown-host", "unknown-ip", "unknown-process"}],
+                "investigation_summary": (
+                    f"The endpoint reported event type '{event_type}' on {host}. The case is designed for low-cost "
+                    "triage first, then selective AI escalation only when risk justifies model usage."
+                ),
+                "supporting_evidence": (raw_alert.get("telemetry") or ["Endpoint telemetry was received and normalized."])[:3],
+                "action_type": action_type,
+                "proposed_action": (
+                    f"Contain process {process_name} on {host}, collect forensic artifacts, and keep outbound network "
+                    "controls scoped to only the observed indicators."
+                    if process_name != "unknown-process"
+                    else f"Place {host} into heightened monitoring and block suspicious outbound indicators pending analyst confirmation."
+                ),
+                "operator_brief": (
+                    "This response is intentionally conservative for single-endpoint operations: contain what is known, "
+                    "preserve evidence, and avoid broad disruptive actions."
+                ),
+                "pre_approval_checklist": [
+                    "Confirm the event is not part of a planned administrative maintenance task",
+                    "Capture process tree and command-line artifacts before containment",
+                    "Validate rollback steps are available if activity is later deemed benign",
+                ],
+            }
+
         if scenario_id == "impossible_travel":
             locations = raw_alert.get("locations", ["unknown-location-a", "unknown-location-b"])
             return {
@@ -1384,6 +1681,40 @@ Optimize for least-privilege containment that still meaningfully reduces risk.
             pre_approval_checklist=profile["pre_approval_checklist"],
         )
 
+    def _generate_sample_endpoint_alert(self) -> dict[str, Any]:
+        host = self._host()
+        user = self._user()
+        process_name = self._choice(["powershell.exe", "cmd.exe", "wscript.exe"])
+        source_ip = self._public_ip()
+        event_type = self._choice(
+            [
+                "encoded_powershell_execution",
+                "repeated_failed_logins",
+                "suspicious_outbound_connection",
+            ]
+        )
+        return {
+            "alert_id": self._new_alert_id(),
+            "generated_at": utc_now().isoformat(),
+            "scenario_id": "endpoint_sample",
+            "source": "Local Endpoint Agent",
+            "rule_name": f"Sample Endpoint Event: {event_type}",
+            "summary": f"{host} produced {event_type} activity requiring analyst review.",
+            "mitre_tactic": "Execution",
+            "affected_user": user,
+            "affected_host": host,
+            "source_ip": source_ip,
+            "process_name": process_name,
+            "event_type": event_type,
+            "indicators": [host, user, source_ip, process_name, event_type],
+            "telemetry": [
+                "Sample endpoint event generated for dashboard testing.",
+                f"Observed process: {process_name}",
+                "This sample case follows low-token fallback reasoning unless risk threshold is met.",
+            ],
+            "analyst_supplied_severity": "Medium",
+        }
+
     def _generate_mock_alert(self) -> dict[str, Any]:
         scenario = random.choice(
             [
@@ -1591,9 +1922,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Agentic Security Operations Center",
-    description="Prototype Manager-Worker SOC with human-in-the-loop containment governance.",
-    version="1.0.0",
+    title="Endpoint SOC Copilot",
+    description="Single-endpoint security triage with human-approved response actions.",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -1690,6 +2021,31 @@ async def logout() -> RedirectResponse:
     return response
 
 
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request) -> HTMLResponse:
+    user = current_user_from_request(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    bootstrap_json = json.dumps(soc_service.frontend_bootstrap())
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {"bootstrap_json": bootstrap_json, "current_user": user.model_dump()},
+    )
+
+
+@app.get("/api/settings", response_model=SettingsView)
+async def get_settings(request: Request) -> SettingsView:
+    require_user(request)
+    return soc_service.get_settings_view()
+
+
+@app.put("/api/settings", response_model=SettingsView)
+async def update_settings(request: Request, payload: SettingsUpdateRequest) -> SettingsView:
+    require_user(request)
+    return await soc_service.update_settings(payload)
+
+
 @app.get("/api/me", response_model=UserIdentity)
 async def get_me(request: Request) -> UserIdentity:
     return require_user(request)
@@ -1712,8 +2068,10 @@ async def list_alerts(request: Request) -> list[AlertRecord]:
 @app.post("/api/alerts/generate", response_model=AlertRecord)
 async def generate_alert(request: Request) -> AlertRecord:
     require_user(request)
+    if not soc_service.enable_sample_generation:
+        raise HTTPException(status_code=403, detail="Sample event generation is disabled.")
     print("[API] /api/alerts/generate requested")
-    return await soc_service.generate_and_store_alert("manual")
+    return await soc_service.generate_and_store_alert("manual-sample")
 
 
 @app.post("/api/ingest/webhook", response_model=AlertRecord)
@@ -1725,6 +2083,17 @@ async def ingest_webhook_alert(
     raw_body = await request.body()
     signature = request.headers.get("X-Signature")
     return await soc_service.ingest_external_alert(payload, raw_body, signature)
+
+
+@app.post("/api/ingest/endpoint-event", response_model=AlertRecord)
+async def ingest_endpoint_event(
+    request: Request,
+    payload: EndpointEventIngestRequest,
+) -> AlertRecord:
+    print("[API] /api/ingest/endpoint-event requested")
+    raw_body = await request.body()
+    signature = request.headers.get("X-Signature")
+    return await soc_service.ingest_endpoint_event(payload, raw_body, signature)
 
 
 @app.get("/api/alerts/{alert_id}", response_model=AlertRecord)
