@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 
 import structlog
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from copilot_soc.api import alerts, auth, billing, ingestion, settings as settings_api
 from copilot_soc.api.deps import close_db, get_db
@@ -46,6 +49,18 @@ app.include_router(settings_api.router)
 app.include_router(billing.router)
 
 
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+else:
+    logger.warning("static_dir_not_found", path=str(STATIC_DIR))
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/docs")
+
+
 @app.on_event("startup")
 async def startup():
     logger.info("copilot_soc_starting", env=settings.environment)
@@ -53,8 +68,11 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    await close_db()
-    logger.info("database_disconnected")
+    try:
+        await close_db()
+        logger.info("database_disconnected")
+    except Exception:
+        pass
 
 
 @app.get("/api/health")
