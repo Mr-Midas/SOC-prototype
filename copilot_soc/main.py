@@ -48,8 +48,12 @@ app.include_router(billing.router)
 
 @app.on_event("startup")
 async def startup():
-    db = await get_db()
-    logger.info("database_connected")
+    try:
+        db = await get_db()
+        logger.info("database_connected")
+    except Exception as exc:
+        logger.warning("database_unavailable", error=str(exc))
+        logger.warning("Run `docker compose up -d` to start PostgreSQL + Redis, or set DATABASE_URL")
 
 
 @app.on_event("shutdown")
