@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import os
-
-import structlog
 from pathlib import Path
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from copilot_soc.api import alerts, auth, billing, ingestion, settings as settings_api
+from copilot_soc.api import alerts, auth, billing, frontend, ingestion, settings as settings_api
 from copilot_soc.api.deps import close_db, get_db
 from copilot_soc.config import settings
 
@@ -43,6 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(frontend.router)
 app.include_router(ingestion.router)
 app.include_router(alerts.router)
 app.include_router(settings_api.router)
@@ -54,11 +53,6 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 else:
     logger.warning("static_dir_not_found", path=str(STATIC_DIR))
-
-
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/docs")
 
 
 @app.on_event("startup")
