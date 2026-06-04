@@ -15,8 +15,12 @@ class Database:
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
-        dsn = os.getenv("DATABASE_URL", "postgresql://copilot:copilot@localhost:5432/copilot_soc")
-        self.pool = await asyncpg.create_pool(dsn, min_size=4, max_size=16)
+        dsn = os.getenv("DATABASE_URL", "")
+        if not dsn:
+            raise ConnectionError("DATABASE_URL not set. Run `docker compose up -d` to start PostgreSQL.")
+        if "connect_timeout" not in dsn:
+            dsn += "&connect_timeout=5" if "?" in dsn else "?connect_timeout=5"
+        self.pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8)
 
     async def close(self) -> None:
         if self.pool:
