@@ -78,11 +78,17 @@ function formatDate(value) {
 
 function setRuntimeBadges() {
     const provider = state.runtime.provider || "unknown";
-    elements.modeBadge.textContent = state.runtime.liveAiMode ? "Live Inference" : "Fallback Simulation";
+    elements.modeBadge.textContent = state.runtime.liveAiMode ? "Selective AI" : "Rules-Only";
     elements.modelBadge.textContent = `${String(provider).toUpperCase()} / ${state.runtime.model || "Unconfigured"}`;
     elements.intervalBadge.textContent = state.runtime.autoGenerate
         ? `${state.runtime.generationIntervalSeconds || 0}s`
-        : "Manual";
+        : `Manual / AI >= ${state.runtime.minRiskForAi ?? "n/a"}`;
+    if (!state.runtime.sampleGenerationEnabled) {
+        elements.generateButton.disabled = true;
+        elements.generateButton.style.opacity = "0.6";
+        elements.generateButton.style.cursor = "not-allowed";
+        elements.generateButton.title = "Sample event generation disabled by configuration.";
+    }
 }
 
 function showToast(message, tone = "info") {
@@ -308,7 +314,7 @@ async function generateAlert() {
         state.selectedAlertId = alert.id;
         renderStats();
         renderDetail(alert);
-        showToast("New mock alert generated and triaged.");
+        showToast("Sample endpoint event generated and triaged.");
     } catch (error) {
         console.error(error);
         showToast(error.message, "error");

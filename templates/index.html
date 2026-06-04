@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agentic Security Operations Center</title>
+    <title>Endpoint SOC Copilot</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@500;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
@@ -37,7 +37,7 @@
         };
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body class="min-h-screen bg-background text-foreground font-mono">
     <div class="cyber-grid"></div>
@@ -46,29 +46,23 @@
     <div class="scan-beam"></div>
 
     <div class="relative z-10 mx-auto min-h-screen max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div class="mb-4 flex flex-col gap-3 border border-border bg-card/80 px-4 py-3 text-xs font-accent uppercase tracking-[0.18em] text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-            <div class="flex flex-wrap items-center gap-3">
-                <span>User: {{ current_user.username }}</span>
-                <span>Role: {{ current_user.role }}</span>
-            </div>
-            <form action="/logout" method="post">
-                <button class="cyber-button cyber-button-outline w-full sm:w-auto">Logout</button>
-            </form>
-        </div>
-
         <header class="cyber-shell hero-shell overflow-hidden px-6 py-6 lg:px-8">
             <div class="hero-circuit"></div>
             <div class="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
                 <div class="max-w-3xl">
                     <div class="terminal-kicker">
                         <span class="terminal-prompt">></span>
-                        Tier 4 Governor Console
+                        Endpoint Governor Console
                     </div>
-                    <h1 class="cyber-glitch mt-5 font-display text-5xl font-black uppercase tracking-[0.18em] text-foreground sm:text-6xl xl:text-7xl" data-text="Agentic Security Operations Center">
-                        Agentic Security Operations Center
+                    <div class="mt-3 flex flex-wrap items-center gap-3 text-xs font-accent uppercase tracking-[0.18em] text-slate-400">
+                        <span>User: {{ current_user.username }}</span>
+                        <span>Role: {{ current_user.role }}</span>
+                    </div>
+                    <h1 class="cyber-glitch mt-5 font-display text-5xl font-black uppercase tracking-[0.18em] text-foreground sm:text-6xl xl:text-7xl" data-text="Endpoint SOC Copilot">
+                        Endpoint SOC Copilot
                     </h1>
                     <p class="type-line mt-5 max-w-2xl text-base leading-8 text-slate-300 sm:text-lg">
-                        Live triage. Transparent agent reasoning. Human-governed containment for a 24/7 defensive command surface.
+                        Rules-first triage for one endpoint, selective AI only for higher-risk events, and human-governed containment.
                     </p>
                 </div>
 
@@ -82,9 +76,13 @@
                         <div id="model-badge" class="hud-value">Loading</div>
                     </article>
                     <article class="hud-card">
-                        <div class="hud-label">Alert Interval</div>
+                        <div class="hud-label">Sample / AI Policy</div>
                         <div id="interval-badge" class="hud-value">Loading</div>
                     </article>
+                    <form action="/logout" method="post" class="sm:col-span-3">
+                        <button class="cyber-button cyber-button-outline w-full">Logout</button>
+                    </form>
+                    <a href="/settings" class="cyber-button cyber-button-primary sm:col-span-3 text-center">Open Control Panel</a>
                 </div>
             </div>
         </header>
@@ -114,7 +112,7 @@
                         <div class="section-kicker">Alert Intake</div>
                         <h2 class="font-display text-3xl font-bold uppercase tracking-[0.12em] text-foreground">Live Alert Feed</h2>
                         <p class="mt-2 max-w-xl text-sm leading-7 text-slate-400">
-                            Mock SIEM events stream into the queue, get scored by the manager, and surface here for operator review.
+                            Endpoint events stream into the queue, get scored with token-aware triage, and surface here for operator review.
                         </p>
                     </div>
 
@@ -122,8 +120,8 @@
                         <button id="refresh-button" class="cyber-button cyber-button-outline">
                             Refresh Feed
                         </button>
-                        <button id="generate-button" class="cyber-button cyber-button-primary cyber-glitch-button" data-text="Generate Alert">
-                            Generate Alert
+                        <button id="generate-button" class="cyber-button cyber-button-primary cyber-glitch-button" data-text="Generate Sample">
+                            Generate Sample
                         </button>
                     </div>
                 </div>
@@ -238,6 +236,6 @@
             window.SOC_BOOTSTRAP = {};
         }
     </script>
-    <script src="static/js/app.js" defer></script>
+    <script src="/static/js/app.js" defer></script>
 </body>
 </html>

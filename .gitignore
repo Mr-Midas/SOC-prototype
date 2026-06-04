@@ -1,3 +1,9 @@
 .env
+.env.local
 __pycache__/
 *.pyc
+.venv/
+.venv_*/
+soc.db
+.collector_state.json
+user_settings.json
