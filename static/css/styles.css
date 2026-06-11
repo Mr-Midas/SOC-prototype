@@ -522,6 +522,22 @@ body {
     background: rgba(255, 51, 102, 0.08);
 }
 
+.feed-item-resolved {
+    padding: 0.6rem 1rem;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+}
+.feed-item-resolved:hover,
+.feed-item-resolved.active {
+    opacity: 1;
+}
+.severity-pill-sm {
+    min-width: 0;
+    padding: 0.22rem 0.5rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+}
+
 .empty-terminal-icon {
     display: inline-grid;
     place-items: center;

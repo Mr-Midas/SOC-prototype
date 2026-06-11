@@ -34,7 +34,20 @@ const elements = {
     modelBadge: document.getElementById("model-badge"),
     intervalBadge: document.getElementById("interval-badge"),
     toast: document.getElementById("toast"),
+    resolvedSection: document.getElementById("resolved-section"),
+    resolvedToggle: document.getElementById("resolved-toggle"),
+    resolvedCount: document.getElementById("resolved-count"),
+    resolvedChevron: document.getElementById("resolved-chevron"),
+    resolvedList: document.getElementById("resolved-list"),
 };
+
+function isLive(alert) {
+    return !alert.governor.status || alert.governor.status === "Pending" || alert.governor.status === "Pending Approval";
+}
+
+function isResolved(alert) {
+    return alert.governor.status === "Approved" || alert.governor.status === "Rejected";
+}
 
 function escapeHtml(value) {
     return String(value)
@@ -58,6 +71,7 @@ function severityClass(severity) {
 function statusClass(status) {
     const map = {
         "Pending Approval": "status-pending",
+        Pending: "status-pending",
         Approved: "status-approved",
         Rejected: "status-rejected",
     };
@@ -130,8 +144,9 @@ async function api(path, options = {}) {
 }
 
 function renderStats() {
-    const pending = state.alerts.filter((alert) => alert.governor.status === "Pending Approval").length;
-    const critical = state.alerts.filter((alert) => ["High", "Critical"].includes(alert.manager.severity)).length;
+    const live = state.alerts.filter(isLive);
+    const pending = live.length;
+    const critical = live.filter((alert) => ["High", "Critical"].includes(alert.manager.severity)).length;
     const approved = state.alerts.filter((alert) => alert.governor.status === "Approved").length;
 
     elements.openCount.textContent = String(pending);
@@ -140,41 +155,81 @@ function renderStats() {
 }
 
 function renderFeed() {
-    if (!state.alerts.length) {
+    const liveAlerts = state.alerts.filter(isLive);
+
+    if (!liveAlerts.length) {
         elements.feed.innerHTML = "";
         elements.feedEmpty.classList.remove("hidden");
         renderEmptyDetail();
-        return;
+    } else {
+        elements.feedEmpty.classList.add("hidden");
+        elements.feed.innerHTML = liveAlerts
+            .map((alert) => {
+                const isActive = alert.id === state.selectedAlertId;
+                return `
+                    <button class="feed-item ${isActive ? "active" : ""}" data-alert-id="${escapeHtml(alert.id)}">
+                        <div class="flex flex-wrap items-start justify-between gap-3">
+                            <div class="max-w-[75%]">
+                                <div class="severity-pill ${severityClass(alert.manager.severity)}">${escapeHtml(alert.manager.severity)}</div>
+                                <div class="mt-4 font-display text-xl font-bold uppercase tracking-[0.08em] text-white">${escapeHtml(alert.rule_name)}</div>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">${escapeHtml(alert.summary)}</p>
+                            </div>
+                            <div class="flex flex-col items-end gap-2">
+                                <div class="status-chip ${statusClass(alert.governor.status)}">${escapeHtml(alert.governor.status)}</div>
+                                <div class="font-accent text-[11px] uppercase tracking-[0.2em] text-slate-500">${escapeHtml(alert.source)}</div>
+                            </div>
+                        </div>
+                        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 font-accent text-xs uppercase tracking-[0.12em] text-slate-400">
+                            <span>Risk ${escapeHtml(alert.manager.risk_score)} / Confidence ${escapeHtml(alert.triage.confidence_score)}</span>
+                            <span>${escapeHtml(formatDate(alert.created_at))}</span>
+                        </div>
+                    </button>
+                `;
+            })
+            .join("");
+
+        document.querySelectorAll("[data-alert-id]").forEach((item) => {
+            item.addEventListener("click", () => {
+                selectAlert(item.getAttribute("data-alert-id"));
+            });
+        });
     }
 
-    elements.feedEmpty.classList.add("hidden");
+    renderResolvedBacklog();
+}
 
-    elements.feed.innerHTML = state.alerts
+function renderResolvedBacklog() {
+    const resolved = state.alerts.filter(isResolved);
+    const count = resolved.length;
+    elements.resolvedCount.textContent = `(${count})`;
+
+    if (!count) {
+        elements.resolvedSection.classList.add("hidden");
+        return;
+    }
+    elements.resolvedSection.classList.remove("hidden");
+
+    elements.resolvedList.innerHTML = resolved
         .map((alert) => {
             const isActive = alert.id === state.selectedAlertId;
             return `
-                <button class="feed-item ${isActive ? "active" : ""}" data-alert-id="${escapeHtml(alert.id)}">
-                    <div class="flex flex-wrap items-start justify-between gap-3">
-                        <div class="max-w-[75%]">
-                            <div class="severity-pill ${severityClass(alert.manager.severity)}">${escapeHtml(alert.manager.severity)}</div>
-                            <div class="mt-4 font-display text-xl font-bold uppercase tracking-[0.08em] text-white">${escapeHtml(alert.rule_name)}</div>
-                            <p class="mt-3 text-sm leading-7 text-slate-300">${escapeHtml(alert.summary)}</p>
+                <button class="feed-item feed-item-resolved ${isActive ? "active" : ""}" data-alert-id="${escapeHtml(alert.id)}">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div class="flex items-center gap-3">
+                            <div class="severity-pill severity-pill-sm ${severityClass(alert.manager.severity)}">${escapeHtml(alert.manager.severity)}</div>
+                            <span class="font-display text-sm font-bold uppercase tracking-[0.08em] text-white">${escapeHtml(alert.rule_name)}</span>
                         </div>
-                        <div class="flex flex-col items-end gap-2">
+                        <div class="flex items-center gap-3">
                             <div class="status-chip ${statusClass(alert.governor.status)}">${escapeHtml(alert.governor.status)}</div>
-                            <div class="font-accent text-[11px] uppercase tracking-[0.2em] text-slate-500">${escapeHtml(alert.source)}</div>
+                            <span class="font-accent text-[11px] uppercase tracking-[0.12em] text-slate-500">${escapeHtml(formatDate(alert.created_at))}</span>
                         </div>
-                    </div>
-                    <div class="mt-5 flex flex-wrap items-center justify-between gap-3 font-accent text-xs uppercase tracking-[0.12em] text-slate-400">
-                        <span>Risk ${escapeHtml(alert.manager.risk_score)} / Confidence ${escapeHtml(alert.triage.confidence_score)}</span>
-                        <span>${escapeHtml(formatDate(alert.created_at))}</span>
                     </div>
                 </button>
             `;
         })
         .join("");
 
-    document.querySelectorAll("[data-alert-id]").forEach((item) => {
+    document.querySelectorAll("#resolved-list [data-alert-id]").forEach((item) => {
         item.addEventListener("click", () => {
             selectAlert(item.getAttribute("data-alert-id"));
         });
@@ -259,6 +314,14 @@ function renderDetail(alert) {
         .map((indicator) => `<span class="token">${escapeHtml(indicator)}</span>`)
         .join("");
 
+    const resolved = isResolved(alert);
+    elements.approveButton.disabled = resolved;
+    elements.rejectButton.disabled = resolved;
+    elements.approveButton.style.opacity = resolved ? "0.4" : "1";
+    elements.rejectButton.style.opacity = resolved ? "0.4" : "1";
+    elements.approveButton.style.cursor = resolved ? "not-allowed" : "pointer";
+    elements.rejectButton.style.cursor = resolved ? "not-allowed" : "pointer";
+
     renderFeed();
 }
 
@@ -276,7 +339,7 @@ async function loadAlerts({ preserveSelection = true } = {}) {
     renderFeed();
 
     if (state.selectedAlertId) {
-        const selected = alerts.find((alert) => alert.id === state.selectedAlertId);
+        const selected = state.alerts.find((alert) => alert.id === state.selectedAlertId);
         renderDetail(selected);
     } else {
         renderEmptyDetail();
@@ -390,6 +453,13 @@ async function init() {
     }));
     elements.approveButton.addEventListener("click", () => submitDecision("approve"));
     elements.rejectButton.addEventListener("click", () => submitDecision("reject"));
+
+    elements.resolvedToggle.addEventListener("click", () => {
+        const isHidden = elements.resolvedList.classList.contains("hidden");
+        elements.resolvedList.classList.toggle("hidden");
+        elements.resolvedChevron.textContent = isHidden ? "\u2212" : "+";
+        elements.resolvedChevron.style.transform = isHidden ? "rotate(0deg)" : "";
+    });
 
     try {
         await loadAlerts({ preserveSelection: false });

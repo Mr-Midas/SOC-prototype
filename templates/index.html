@@ -130,6 +130,19 @@
                     No alerts available yet.
                 </div>
                 <div id="alert-feed" class="mt-5 space-y-4"></div>
+
+                <div id="resolved-section" class="mt-6 border-t border-border pt-5">
+                    <button id="resolved-toggle" class="flex w-full items-center justify-between text-left" type="button">
+                        <div>
+                            <div class="section-kicker">Resolved Backlog</div>
+                            <h3 class="font-display text-xl font-bold uppercase tracking-[0.12em] text-foreground">
+                                Resolved Alerts <span id="resolved-count" class="text-sm text-slate-400">(0)</span>
+                            </h3>
+                        </div>
+                        <span id="resolved-chevron" class="text-xl text-slate-400 transition-transform duration-200">+</span>
+                    </button>
+                    <div id="resolved-list" class="mt-4 hidden space-y-3"></div>
+                </div>
             </section>
 
             <aside id="detail-panel" class="cyber-shell analysis-shell p-5">
@@ -236,6 +249,6 @@
             window.SOC_BOOTSTRAP = {};
         }
     </script>
-    <script src="/static/js/app.js?v=2" defer></script>
+    <script src="/static/js/app.js?v=3" defer></script>
 </body>
 </html>
