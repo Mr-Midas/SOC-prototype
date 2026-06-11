@@ -167,6 +167,7 @@ CREATE TABLE tenant_settings (
     use_ai_triage BOOLEAN NOT NULL DEFAULT TRUE,
     threat_intel_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     sample_events_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    monitor_windows_events BOOLEAN NOT NULL DEFAULT FALSE,
     collector_interval_seconds INT NOT NULL DEFAULT 30,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

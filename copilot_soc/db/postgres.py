@@ -28,12 +28,11 @@ class Database:
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
-        dsn = os.getenv("DATABASE_URL", "")
+        from copilot_soc.config import settings as _cfg
+        dsn = os.getenv("DATABASE_URL") or _cfg.database_url
         if not dsn:
             raise ConnectionError("DATABASE_URL not set. Run `docker compose up -d` to start PostgreSQL.")
-        if "connect_timeout" not in dsn:
-            dsn += "&connect_timeout=5" if "?" in dsn else "?connect_timeout=5"
-        self.pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8)
+        self.pool = await asyncpg.create_pool(dsn, min_size=2, max_size=8, command_timeout=10)
 
     async def close(self) -> None:
         if self.pool:
@@ -203,14 +202,42 @@ class Database:
             )
             return dict(row) if row else None
 
-    async def list_alerts(self, tenant_id: UUID, limit: int = 50) -> list[dict[str, Any]]:
-        """Return recent alerts for the tenant dashboard, newest first."""
+    async def list_alerts(self, tenant_id: UUID, limit: int = 50, page: int = 1, per_page: int = 25,
+                          pipeline_state: Optional[str] = None, governor_status: Optional[str] = None,
+                          severity: Optional[str] = None) -> dict[str, Any]:
+        """Paginated alert list for the tenant dashboard with optional filters."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM alerts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
-                tenant_id, limit,
+            where = ["tenant_id = $1"]
+            args: list[Any] = [tenant_id]
+            idx = 2
+
+            if pipeline_state:
+                where.append(f"pipeline_state = ${idx}")
+                args.append(pipeline_state)
+                idx += 1
+            if governor_status:
+                where.append(f"governor_status = ${idx}")
+                args.append(governor_status)
+                idx += 1
+            if severity:
+                where.append(f"severity = ${idx}")
+                args.append(severity)
+                idx += 1
+
+            where_clause = " AND ".join(where)
+
+            count_row = await conn.fetchrow(
+                f"SELECT COUNT(*) as cnt FROM alerts WHERE {where_clause}", *args,
             )
-            return [dict(r) for r in rows]
+            total = count_row["cnt"]
+
+            offset = (page - 1) * per_page
+            rows = await conn.fetch(
+                f"SELECT * FROM alerts WHERE {where_clause} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+                *args, per_page, offset,
+            )
+
+            return {"rows": [dict(r) for r in rows], "total": total}
 
     async def update_alert_pipeline(
         self,
@@ -282,7 +309,14 @@ class Database:
             if decision == "approved":
                 alert = await self.get_alert(alert_id, tenant_id)
                 if alert and alert.get("containment_output"):
-                    await self.enqueue_action(tenant_id, alert_id, alert["containment_output"])
+                    co = alert["containment_output"]
+                    if isinstance(co, str):
+                        import json as _json
+                        try:
+                            co = _json.loads(co)
+                        except Exception:
+                            co = {}
+                    await self.enqueue_action(tenant_id, alert_id, co)
 
     # ── Action Queue ───────────────────────────────────────────
 

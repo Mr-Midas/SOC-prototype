@@ -32,7 +32,9 @@ async def get_settings(request: Request):
         else:
             clean[k] = None
 
-    return {"settings": clean}
+    clean["sampleGenerationEnabled"] = clean.get("sample_events_enabled", True)
+    import platform
+    return {"settings": clean, "is_windows": platform.system() == "Windows", "collector_status": None}
 
 
 @router.put("/api/settings")
@@ -42,14 +44,20 @@ async def update_settings(request: Request):
     tenant_id = UUID(user_identity["tenant_id"])
 
     body = await request.json()
-    try:
-        update = TenantSettingsUpdate(**body)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid settings: {exc}")
+    changes = {}
+    for key in ("use_ai_triage", "safe_mode", "threat_intel_enabled", "sample_events_enabled", "monitor_windows_events"):
+        if key in body:
+            changes[key] = bool(body[key])
 
-    changes = update.model_dump(exclude_none=True)
-    if not changes:
-        return {"status": "no changes"}
+    if changes:
+        await db.update_settings(tenant_id, changes)
 
-    await db.update_settings(tenant_id, changes)
-    return {"status": "updated"}
+    settings = await db.get_settings(tenant_id)
+    sensitive_keys = {"llm_api_key", "webhook_secret"}
+    clean = {k: v for k, v in settings.items() if k not in sensitive_keys}
+    for k in sensitive_keys:
+        clean[k] = "********" if settings.get(k) else None
+
+    clean["sampleGenerationEnabled"] = clean.get("sample_events_enabled", True)
+    import platform
+    return {"settings": clean, "is_windows": platform.system() == "Windows", "collector_status": None}

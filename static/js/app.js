@@ -263,13 +263,13 @@ function renderDetail(alert) {
 }
 
 async function loadAlerts({ preserveSelection = true } = {}) {
-    const alerts = await api("/api/alerts");
-    state.alerts = alerts;
+    const data = await api("/api/alerts");
+    state.alerts = data.alerts || [];
 
     if (!preserveSelection || !state.selectedAlertId) {
-        state.selectedAlertId = alerts[0]?.id || null;
-    } else if (!alerts.some((alert) => alert.id === state.selectedAlertId)) {
-        state.selectedAlertId = alerts[0]?.id || null;
+        state.selectedAlertId = state.alerts[0]?.id || null;
+    } else if (!state.alerts.some((alert) => alert.id === state.selectedAlertId)) {
+        state.selectedAlertId = state.alerts[0]?.id || null;
     }
 
     renderStats();
@@ -291,7 +291,8 @@ async function selectAlert(alertId) {
     }
 
     try {
-        const alert = await api(`/api/alerts/${encodeURIComponent(alertId)}`);
+        const data = await api(`/api/alerts/${encodeURIComponent(alertId)}`);
+        const alert = data.alert || data;
         const index = state.alerts.findIndex((item) => item.id === alert.id);
         if (index >= 0) {
             state.alerts[index] = alert;

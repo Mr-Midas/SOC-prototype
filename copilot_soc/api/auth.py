@@ -120,7 +120,10 @@ async def login(request: Request):
         raise HTTPException(status_code=500, detail="No tenant configured.")
 
     tenant_id = tenant["id"]
-    user_record = await db.get_user_by_email(tenant_id, payload.email)
+    email = payload.email
+    if email == "admin":
+        email = "admin@copilot-soc.local"
+    user_record = await db.get_user_by_email(tenant_id, email)
     if not user_record or not _verify_password(payload.password, user_record["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 

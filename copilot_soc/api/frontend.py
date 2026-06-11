@@ -51,6 +51,13 @@ def _get_bootstrap_data(request: Request) -> dict[str, Any]:
         "bootstrap_json": {
             "username": user["user_id"][:8],
             "role": user["role"],
+            "sampleGenerationEnabled": True,
+            "liveAiMode": False,
+            "autoGenerate": False,
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "minRiskForAi": 70,
+            "generationIntervalSeconds": 0,
         },
     }
 
@@ -73,7 +80,7 @@ async def login_form(request: Request):
     """Form-based login (old monolithic frontend style). Redirects on success."""
     try:
         db = await get_db()
-    except ConnectionError:
+    except Exception:
         return RedirectResponse(
             url="/login?error=Database+unavailable.+Ensure+PostgreSQL+is+running+and+DATABASE_URL+is+set",
             status_code=303,
@@ -84,6 +91,9 @@ async def login_form(request: Request):
 
     if not username or not password:
         return RedirectResponse(url="/login?error=Username+and+password+required", status_code=303)
+
+    if username == "admin":
+        username = "admin@copilot-soc.local"
 
     tenant = await db.get_tenant_by_slug("default")
     if not tenant:
@@ -129,16 +139,6 @@ async def settings_page(request: Request):
     )
 
 
-@router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
-    """Tenant settings page — requires authentication."""
-    require_auth(request)
-    return templates.TemplateResponse(
-        "settings.html",
-        {"request": request, **_get_bootstrap_data(request)},
-    )
-
-
 @router.post("/api/alerts/generate")
 async def generate_sample(request: Request):
     """Generate a sample alert for demo/testing. Created by the old frontend dashboard."""
@@ -172,7 +172,49 @@ async def generate_sample(request: Request):
         raw_alert=raw,
     )
 
-    return {"status": "accepted", "id": str(alert["id"])}
+    from copilot_soc.pipeline.fallback import fallback_manager, fallback_triage, fallback_containment
+    manager = fallback_manager(raw)
+    triage = fallback_triage(raw, manager)
+    containment = fallback_containment(raw, manager, triage)
+
+    await db.update_alert_pipeline(
+        UUID(str(alert["id"])), tenant_id,
+        pipeline_state="completed",
+        manager_output={
+            "severity": manager.severity,
+            "risk_score": manager.risk_score,
+            "routing_rationale": manager.routing_rationale,
+            "triage_focus": manager.triage_focus,
+            "notable_entities": manager.notable_entities,
+        },
+        triage_output={
+            "confidence_score": triage.confidence_score,
+            "classification": triage.classification,
+            "investigation_summary": triage.investigation_summary,
+            "supporting_evidence": triage.supporting_evidence,
+        },
+        containment_output={
+            "proposed_action": containment.proposed_action,
+            "action_type": containment.action_type,
+            "operator_brief": containment.operator_brief,
+            "pre_approval_checklist": containment.pre_approval_checklist,
+        },
+        reasoning_log=[
+            {"stage": "manager", "agent_role": "Manager", "summary": manager.routing_rationale,
+             "output": {"severity": manager.severity, "risk_score": manager.risk_score}},
+            {"stage": "triage", "agent_role": "Triage Analyst", "summary": triage.investigation_summary,
+             "output": {"confidence_score": triage.confidence_score, "classification": triage.classification}},
+            {"stage": "containment", "agent_role": "Containment Planner", "summary": containment.proposed_action,
+             "output": {"action_type": containment.action_type, "operator_brief": containment.operator_brief}},
+        ],
+        severity=manager.severity,
+        risk_score=manager.risk_score,
+        classification=triage.classification,
+    )
+
+    from copilot_soc.api.alerts import _transform_alert
+    full_alert = await db.get_alert(UUID(str(alert["id"])), tenant_id)
+    return _transform_alert(full_alert) if full_alert else {"id": str(alert["id"]), "rule_name": raw["rule_name"]}
 
 
 @router.post("/api/alerts/{alert_id}/decision")
@@ -208,4 +250,6 @@ async def alert_decision(alert_id: str, request: Request):
         note=note,
     )
 
-    return {"status": governor_status, "alert_id": alert_id}
+    from copilot_soc.api.alerts import _transform_alert
+    updated_alert = await db.get_alert(UUID(alert_id), tenant_id)
+    return _transform_alert(updated_alert) if updated_alert else {"status": governor_status, "alert_id": alert_id}

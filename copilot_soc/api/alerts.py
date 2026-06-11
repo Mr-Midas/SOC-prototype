@@ -18,6 +18,58 @@ from copilot_soc.models import DecisionRequest
 router = APIRouter(tags=["alerts"])
 
 
+def _parse_jsonb(value):
+    """Parse a JSONB value that may come back as a string or dict/list from asyncpg."""
+    if isinstance(value, str):
+        import json
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return value if value else {}
+
+
+def _transform_alert(row: dict) -> dict:
+    """Transform flat DB row into the nested structure the frontend JS expects."""
+    raw = _parse_jsonb(row.get("raw_alert"))
+    manager = _parse_jsonb(row.get("manager_output"))
+    triage = _parse_jsonb(row.get("triage_output"))
+    containment = _parse_jsonb(row.get("containment_output"))
+    governor_decision = _parse_jsonb(row.get("governor_decision"))
+    reasoning = _parse_jsonb(row.get("reasoning_log"))
+    if not isinstance(reasoning, list):
+        reasoning = []
+
+    if not governor_decision.get("status"):
+        governor_decision = {"status": row.get("governor_status", "pending"), "operator_note": None}
+
+    return {
+        "id": row["id"],
+        "rule_name": row.get("rule_name", ""),
+        "summary": row.get("summary", ""),
+        "source": row.get("source", ""),
+        "severity": row.get("severity"),
+        "created_at": row.get("created_at"),
+        "manager": {
+            "severity": manager.get("severity", row.get("severity", "Medium")),
+            "risk_score": manager.get("risk_score", 50),
+        },
+        "triage": {
+            "confidence_score": triage.get("confidence_score", 0),
+        },
+        "containment": {
+            "proposed_action": containment.get("proposed_action", "No action proposed"),
+        },
+        "governor": {
+            "status": governor_decision.get("status", row.get("governor_status", "Pending Approval")).replace("_", " ").title(),
+            "operator_note": governor_decision.get("operator_note"),
+        },
+        "reasoning_log": reasoning if isinstance(reasoning, list) else [],
+        "telemetry": raw.get("telemetry", []),
+        "indicators": raw.get("indicators", []),
+    }
+
+
 @router.get("/api/alerts")
 async def list_alerts(
     request: Request,
@@ -42,7 +94,7 @@ async def list_alerts(
     )
 
     return {
-        "alerts": result["rows"],
+        "alerts": [_transform_alert(r) for r in result["rows"]],
         "total": result["total"],
         "page": page,
         "per_page": per_page,
@@ -61,9 +113,10 @@ async def get_alert(alert_id: str, request: Request):
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found.")
 
-    return {"alert": alert}
+    return _transform_alert(alert)
 
 
+@router.post("/api/alerts/{alert_id}/decision")
 @router.post("/api/alerts/{alert_id}/governor")
 async def governor_decision(alert_id: str, request: Request):
     """Submit an approve/reject decision. Only governors and admins may call this.
@@ -86,23 +139,19 @@ async def governor_decision(alert_id: str, request: Request):
 
     governor_status = "approved" if decision.decision == "approve" else "rejected"
 
-    await db.update_alert_pipeline(
-        UUID(alert_id), tenant_id,
-        governor_status=governor_status,
+    await db.set_governor_decision(
+        alert_id=UUID(alert_id),
+        tenant_id=tenant_id,
+        decision=governor_status,
         governor_decision={
             "status": governor_status,
             "operator_note": decision.operator_note,
             "decided_at": None,
             "decided_by": user_identity["user_id"],
         },
+        user_id=UUID(user_identity["user_id"]),
+        note=decision.operator_note,
     )
 
-    if governor_status == "approved" and alert.get("containment_output"):
-        await db.enqueue_action(
-            tenant_id=tenant_id,
-            alert_id=UUID(alert_id),
-            action_type=alert["containment_output"].get("action_type", "unknown"),
-            payload=alert["containment_output"],
-        )
-
-    return {"status": governor_status, "alert_id": alert_id}
+    updated_alert = await db.get_alert(UUID(alert_id), tenant_id)
+    return _transform_alert(updated_alert) if updated_alert else {"status": governor_status, "alert_id": alert_id}

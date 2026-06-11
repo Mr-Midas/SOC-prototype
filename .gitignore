@@ -7,3 +7,5 @@ __pycache__/
 soc.db
 .collector_state.json
 user_settings.json
+server.log
+server_out.log
