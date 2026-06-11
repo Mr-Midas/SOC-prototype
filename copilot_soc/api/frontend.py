@@ -71,7 +71,13 @@ async def login_page(request: Request):
 @router.post("/login")
 async def login_form(request: Request):
     """Form-based login (old monolithic frontend style). Redirects on success."""
-    db = await get_db()
+    try:
+        db = await get_db()
+    except ConnectionError:
+        return RedirectResponse(
+            url="/login?error=Database+unavailable.+Ensure+PostgreSQL+is+running+and+DATABASE_URL+is+set",
+            status_code=303,
+        )
     form = await request.form()
     username = str(form.get("username", "")).strip()
     password = str(form.get("password", ""))

@@ -32,8 +32,8 @@ def main() -> int:
     print(" Copilot SOC")
     print("=" * 56)
     print("Starting app (refactored multi-tenant backend)...")
-    print("Dashboard: http://127.0.0.1:8000/")
-    print("Docs:      http://127.0.0.1:8000/docs")
+    print("Login:   http://127.0.0.1:8000/login")
+    print("Docs:    http://127.0.0.1:8000/docs")
     print("Press Ctrl+C to stop.")
     print()
 
@@ -42,7 +42,7 @@ def main() -> int:
         cwd=str(ROOT),
     )
     time.sleep(2)
-    webbrowser.open("http://127.0.0.1:8000/")
+    webbrowser.open("http://127.0.0.1:8000/login")
 
     try:
         return process.wait()
