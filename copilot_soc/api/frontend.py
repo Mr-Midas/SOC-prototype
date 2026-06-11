@@ -1,3 +1,15 @@
+"""Jinja2-based dashboard pages (login, dashboard, settings) + backward compat endpoints.
+
+These routes serve the old monolithic frontend templates so users can immediately
+interact with the refactored backend without waiting for the React SPA (Phase 2).
+
+The ``/login``, ``/`` (dashboard), and ``/settings`` pages are rendered server-side.
+The ``/api/alerts/generate`` and ``/api/alerts/{id}/decision`` endpoints mimic the
+old monolithic API for backward compatibility.
+
+NOTE: Starlette 1.1.0+ requires TemplateResponse(request, name, context) — not (name, context).
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,18 +57,20 @@ def _get_bootstrap_data(request: Request) -> dict[str, Any]:
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    """Render the login page. Redirect to dashboard if already authenticated."""
     token = request.cookies.get("soc_session")
     if token and verify_session_token(token):
         return RedirectResponse(url="/")
     error = request.query_params.get("error", "")
     return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "login_error": error or None},
+        request, "login.html",
+        {"login_error": error or None},
     )
 
 
 @router.post("/login")
 async def login_form(request: Request):
+    """Form-based login (old monolithic frontend style). Redirects on success."""
     db = await get_db()
     form = await request.form()
     username = str(form.get("username", "")).strip()
@@ -92,15 +106,26 @@ async def logout():
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    """Main dashboard — requires authentication."""
     require_auth(request)
     return templates.TemplateResponse(
-        "index.html",
-        {"request": request, **_get_bootstrap_data(request)},
+        request, "index.html",
+        _get_bootstrap_data(request),
     )
 
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
+    require_auth(request)
+    return templates.TemplateResponse(
+        request, "settings.html",
+        _get_bootstrap_data(request),
+    )
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Tenant settings page — requires authentication."""
     require_auth(request)
     return templates.TemplateResponse(
         "settings.html",
@@ -110,6 +135,7 @@ async def settings_page(request: Request):
 
 @router.post("/api/alerts/generate")
 async def generate_sample(request: Request):
+    """Generate a sample alert for demo/testing. Created by the old frontend dashboard."""
     user = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user["tenant_id"])
@@ -145,6 +171,7 @@ async def generate_sample(request: Request):
 
 @router.post("/api/alerts/{alert_id}/decision")
 async def alert_decision(alert_id: str, request: Request):
+    """Backward-compatible decision endpoint (old monolithic API style)."""
     user = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user["tenant_id"])

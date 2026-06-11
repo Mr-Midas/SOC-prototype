@@ -1,3 +1,4 @@
+# Copilot SOC — Python 3.12 slim base (3.14 has litellm compat issues with cgi module)
 FROM python:3.12-slim
 
 WORKDIR /app

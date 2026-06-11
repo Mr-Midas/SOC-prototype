@@ -4,30 +4,33 @@ AI-powered SOC triage copilot — multi-tenant SaaS backend (Phase 1).
 
 Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager → Triage → Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
 
-## Quick Start (Windows)
+## Quick Start (Windows — One-Click)
+
+Double-click **`Start Endpoint SOC Copilot.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
+
+Or manually:
 
 ```powershell
-# 1. Clone and enter the directory
-cd C:\Users\thome\Documents\Codex\2026-04-27\act-as-a-senior-security-architect-3
-
-# 2. Create virtual environment
+# 1. Create virtual environment
 python -m venv .venv
 
-# 3. Activate it
+# 2. Activate it
 .venv\Scripts\activate
 
-# 4. Install dependencies
+# 3. Install dependencies
 pip install -r requirements.txt
 
-# 5. Set up environment (copy defaults)
+# 4. Set up environment (copy defaults)
 copy .env.example .env
 
-# 6. Start the app (uses SQLite fallback, no Postgres required for dev)
+# 5. Start the app (no Postgres required for dev — boots instantly)
 uvicorn copilot_soc.main:app --reload
 
-# 7. Open in browser
+# 6. Open in browser
 start http://127.0.0.1:8000
 ```
+
+> **Note**: The `.bat` files (`Install.bat`, `Start Endpoint SOC Copilot.bat`) and `launcher.py` are legacy convenience wrappers. They work with the refactored backend.
 
 ## Quick Start (Linux / macOS)
 
@@ -93,7 +96,7 @@ This starts: FastAPI app (`:8000`), Celery worker, PostgreSQL 16, Redis 7.
 Copy `.env.example` to `.env` and configure:
 
 ```env
-# Database (omit for SQLite dev fallback)
+# Database (PostgreSQL — app boots without it via graceful error message)
 DATABASE_URL=postgresql://copilot:copilot@localhost:5432/copilot_soc
 
 # Redis (required for Celery worker)

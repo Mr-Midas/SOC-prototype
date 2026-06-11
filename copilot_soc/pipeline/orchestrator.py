@@ -1,3 +1,15 @@
+"""Alert pipeline orchestrator — coordinates the 3-agent chain.
+
+For every ingested alert the orchestrator:
+  1. Runs the Manager agent (classify + severity score)
+  2. Runs the Triage agent (investigation + confidence)
+  3. Runs the Containment agent (action plan + checklist)
+
+Each step tries the AI model first (via LiteLLM), then falls back to
+deterministic logic.  The entire pipeline runs inside a Celery task so
+the ingestion endpoint returns HTTP 202 without blocking.
+"""
+
 from __future__ import annotations
 
 import json

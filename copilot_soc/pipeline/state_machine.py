@@ -1,3 +1,15 @@
+"""Pipeline state machine — deterministic, enum-backed transitions with retry.
+
+States mirror the database pipeline_state enum. Every transition is validated
+at runtime so we never skip a step or double-process an alert.
+
+Why not LangGraph?
+  We only have a linear 3-agent chain (Manager → Triage → Containment).
+  A 70-line enum + transition map is easier to debug, deploy, and understand
+  than a full graph framework. If the chain becomes non-linear in Phase 2
+  we can swap in a proper DAG without changing the agent logic.
+"""
+
 from __future__ import annotations
 
 import asyncio

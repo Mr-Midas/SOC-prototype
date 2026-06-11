@@ -1,3 +1,14 @@
+"""Alert ingestion via webhook (primary path) or local endpoint events.
+
+The primary endpoint is ``POST /api/v1/ingest/alert``.
+Backward-compatible shims exist at ``/api/ingest/webhook`` and
+``/api/ingest/endpoint-event`` so the old monolithic frontend still works.
+
+Every ingested alert is dispatched to Celery for async pipeline processing.
+If Celery / Redis is unreachable the alert is still persisted and the request
+returns HTTP 202 — processing resumes when the worker comes back.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,6 +17,7 @@ import json
 from typing import Optional
 from uuid import UUID, uuid4
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
@@ -14,10 +26,15 @@ from copilot_soc.api.auth import require_auth
 from copilot_soc.models import IngestionRequest
 from copilot_soc.worker.tasks import run_alert_pipeline
 
+logger = structlog.get_logger()
 router = APIRouter(tags=["ingestion"])
 
 
 def _verify_webhook_signature(raw_body: bytes, signature: Optional[str], secret: str) -> bool:
+    """HMAC-SHA256 signature verification for webhook payloads.
+
+    If no webhook_secret is configured, all payloads are accepted (dev mode).
+    """
     if not secret:
         return True
     if not signature:
@@ -33,6 +50,7 @@ def _verify_webhook_signature(raw_body: bytes, signature: Optional[str], secret:
 
 @router.post("/api/v1/ingest/alert")
 async def ingest_alert(request: Request):
+    """Primary ingestion endpoint. Accepts structured JSON, enforces rate limits, dispatches to Celery."""
     user_identity = require_auth(request)
 
     db = await get_db()
@@ -81,7 +99,10 @@ async def ingest_alert(request: Request):
 
     await db.increment_alert_usage(tenant_id)
 
-    run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+    try:
+        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+    except Exception:
+        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {
         "status": "accepted",
@@ -93,12 +114,14 @@ async def ingest_alert(request: Request):
 # Keep backward compatibility with existing webhook path
 @router.post("/api/ingest/webhook")
 async def ingest_webhook_legacy(request: Request):
+    """Legacy alias for /api/v1/ingest/alert (preserved for old webhook integrations)."""
     return await ingest_alert(request)
 
 
 # Keep backward compatibility with existing endpoint-event path
 @router.post("/api/ingest/endpoint-event")
 async def ingest_endpoint_event_legacy(request: Request):
+    """Legacy endpoint-event ingestion (preserved for old monolithic frontend compatibility)."""
     user_identity = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])
@@ -154,6 +177,9 @@ async def ingest_endpoint_event_legacy(request: Request):
     )
 
     await db.increment_alert_usage(tenant_id)
-    run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+    try:
+        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+    except Exception:
+        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {"status": "accepted", "id": str(alert["id"])}

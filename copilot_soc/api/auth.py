@@ -1,3 +1,12 @@
+"""PBKDF2-HMAC-SHA256 authentication with HMAC-signed session tokens.
+
+Hash: salt (hex) + "$" + digest (hex) — stored in users.password_hash.
+Session token: ``{user_id}|{tenant_id}|{role}|{HMAC-SHA256}`` — stored in an
+httponly cookie named ``soc_session`` with 7-day expiry.
+
+Roles: analyst (read alerts), governor (approve/reject), admin (settings).
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,12 +27,14 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", "change-this-session-secret")
 
 
 def _hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256 with 120K iterations and a random 16-byte salt."""
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000)
     return f"{salt}${digest.hex()}"
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
+    """Constant-time compare to prevent timing attacks on login."""
     try:
         salt, expected = password_hash.split("$", 1)
     except ValueError:
@@ -33,6 +44,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 
 def _issue_session_token(user_id: str, tenant_id: str, role: str) -> str:
+    """HMAC-SHA256 signed session token: payload|signature."""
     payload = f"{user_id}|{tenant_id}|{role}"
     signature = hmac.new(
         SESSION_SECRET.encode("utf-8"),
@@ -43,6 +55,7 @@ def _issue_session_token(user_id: str, tenant_id: str, role: str) -> str:
 
 
 def verify_session_token(token: str) -> dict | None:
+    """Validate HMAC signature and role, return user dict or None."""
     try:
         parts = token.split("|", 3)
         if len(parts) != 4:
@@ -64,6 +77,7 @@ def verify_session_token(token: str) -> dict | None:
 
 
 def require_auth(request: Request) -> dict:
+    """Extract the authenticated user from the soc_session cookie. Raises 401 on failure."""
     token = request.cookies.get("soc_session")
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -74,6 +88,7 @@ def require_auth(request: Request) -> dict:
 
 
 def require_governor(request: Request) -> dict:
+    """Like require_auth but also enforces governor or admin role (403 otherwise)."""
     user = require_auth(request)
     if user["role"] not in {"governor", "admin"}:
         raise HTTPException(status_code=403, detail="Governor or admin role required.")
@@ -82,6 +97,7 @@ def require_governor(request: Request) -> dict:
 
 @router.post("/api/login")
 async def login(request: Request):
+    """Authenticate via JSON or form POST; set the soc_session cookie on success."""
     db = await get_db()
     try:
         body = await request.json()
@@ -119,6 +135,7 @@ async def login(request: Request):
 
 @router.post("/api/logout")
 async def logout():
+    """Clear the soc_session cookie."""
     response = Response(status_code=200)
     response.delete_cookie("soc_session")
     return response
@@ -126,5 +143,6 @@ async def logout():
 
 @router.get("/api/me")
 async def get_me(request: Request):
+    """Return current user identity from the session cookie."""
     user = require_auth(request)
     return {"user_id": user["user_id"], "tenant_id": user["tenant_id"], "role": user["role"]}

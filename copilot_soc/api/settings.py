@@ -1,3 +1,9 @@
+"""Tenant settings CRUD — LLM provider, model, webhook secret, feature toggles.
+
+Sensitive values (llm_api_key, webhook_secret) are masked in GET responses.
+The PUT endpoint accepts partial updates via TenantSettingsUpdate model.
+"""
+
 from __future__ import annotations
 
 from uuid import UUID

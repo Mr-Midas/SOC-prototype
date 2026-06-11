@@ -1,3 +1,5 @@
+"""Pydantic models for Copilot SOC — shared data contracts across all layers."""
+
 from __future__ import annotations
 
 from datetime import datetime

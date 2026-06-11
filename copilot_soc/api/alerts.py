@@ -1,3 +1,9 @@
+"""Alert routes — list, detail, and governor decision endpoints.
+
+The governor endpoint is the human-in-the-loop approval mechanism.
+Only users with role=governor or role=admin may approve/reject containment plans.
+"""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -21,6 +27,7 @@ async def list_alerts(
     governor_status: Optional[str] = Query(default=None),
     severity: Optional[str] = Query(default=None),
 ):
+    """Paginated alert list for the dashboard. Supports optional filters."""
     user_identity = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])
@@ -45,6 +52,7 @@ async def list_alerts(
 
 @router.get("/api/alerts/{alert_id}")
 async def get_alert(alert_id: str, request: Request):
+    """Detail view for a single alert — includes pipeline output, reasoning log, governor decision."""
     user_identity = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])
@@ -58,6 +66,10 @@ async def get_alert(alert_id: str, request: Request):
 
 @router.post("/api/alerts/{alert_id}/governor")
 async def governor_decision(alert_id: str, request: Request):
+    """Submit an approve/reject decision. Only governors and admins may call this.
+
+    On approval, the containment action is enqueued for execution by the Celery worker.
+    """
     user_identity = require_governor(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])

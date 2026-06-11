@@ -1,3 +1,13 @@
+"""Deterministic fallback logic for all three pipeline agents.
+
+When LiteLLM is unavailable, the API key is missing, the model returns garbage
+JSON, or the confidence threshold is not met, these functions produce safe defaults.
+
+Each function covers six canonical attack scenarios plus a generic catch-all.
+The scenario-specific branches produce richer output than the generic fallback,
+which is designed to never produce a dangerous "do nothing" recommendation.
+"""
+
 from __future__ import annotations
 
 from typing import Any

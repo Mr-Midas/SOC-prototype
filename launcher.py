@@ -29,20 +29,20 @@ def main() -> int:
     ensure_env_file()
     python_bin = python_executable()
     print("=" * 56)
-    print(" Endpoint SOC Copilot")
+    print(" Copilot SOC")
     print("=" * 56)
-    print("Starting app...")
-    print("Login: admin / ChangeMe123!")
-    print("Control Panel: http://127.0.0.1:8000/settings")
+    print("Starting app (refactored multi-tenant backend)...")
+    print("Dashboard: http://127.0.0.1:8000/")
+    print("Docs:      http://127.0.0.1:8000/docs")
     print("Press Ctrl+C to stop.")
     print()
 
     process = subprocess.Popen(
-        [python_bin, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8000"],
+        [python_bin, "-m", "uvicorn", "copilot_soc.main:app", "--host", "127.0.0.1", "--port", "8000"],
         cwd=str(ROOT),
     )
     time.sleep(2)
-    webbrowser.open("http://127.0.0.1:8000/settings")
+    webbrowser.open("http://127.0.0.1:8000/")
 
     try:
         return process.wait()

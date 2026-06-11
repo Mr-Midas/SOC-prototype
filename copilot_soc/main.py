@@ -1,3 +1,13 @@
+"""FastAPI application entry point.
+
+Boots the web server, mounts routes from all API modules, configures CORS,
+serves static files, and provides a global exception handler.
+
+The database connection is NOT established here — it is lazily created by
+``get_db()`` in deps.py when the first route handler needs it. This means
+``uvicorn copilot_soc.main:app`` succeeds instantly even without PostgreSQL.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,6 +22,7 @@ from copilot_soc.api import alerts, auth, billing, frontend, ingestion, settings
 from copilot_soc.api.deps import close_db, get_db
 from copilot_soc.config import settings
 
+# Structured logging with ISO timestamps and console-friendly output
 structlog.configure(
     processors=[
         structlog.stdlib.add_log_level,
@@ -32,6 +43,7 @@ app = FastAPI(
     description="AI-powered SOC triage copilot — multi-tenant SaaS backend",
 )
 
+# CORS: allow the React dev server (Phase 2) and local development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -40,6 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register all API route modules
 app.include_router(auth.router)
 app.include_router(frontend.router)
 app.include_router(ingestion.router)
@@ -48,6 +61,7 @@ app.include_router(settings_api.router)
 app.include_router(billing.router)
 
 
+# Serve static assets (CSS, JS, images for Jinja2 templates)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -62,6 +76,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    """Gracefully close the database pool on shutdown."""
     try:
         await close_db()
         logger.info("database_disconnected")
@@ -71,10 +86,12 @@ async def shutdown():
 
 @app.get("/api/health")
 async def health():
+    """Lightweight health check. Returns immediately without DB access."""
     return {"status": "ok", "service": "copilot-soc"}
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    """Catch-all that logs the exception and returns a generic 500."""
     logger.exception("unhandled_exception", path=str(request.url))
     return JSONResponse(status_code=500, content={"detail": "Internal server error."})

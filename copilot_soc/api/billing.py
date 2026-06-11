@@ -1,9 +1,18 @@
+"""Stripe billing integration — customer portal session and webhook handling.
+
+The ``/api/billing/portal`` endpoint creates a Stripe Customer Portal session so
+tenants can manage their subscription without leaving the app.
+
+The ``/api/billing/webhook`` endpoint receives Stripe events (subscription updates,
+checkout completions) and updates the local tenant record. Idempotency is handled
+by the stripe_events table.
+"""
+
 from __future__ import annotations
 
 import os
 from uuid import UUID
 
-import stripe
 from fastapi import APIRouter, HTTPException, Request
 
 from copilot_soc.api.auth import require_auth
@@ -14,12 +23,22 @@ router = APIRouter(tags=["billing"])
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
+# Import stripe only if configured — the app boots without it
+stripe = None
 if STRIPE_SECRET_KEY:
-    stripe.api_key = STRIPE_SECRET_KEY
+    try:
+        import stripe as _stripe
+        stripe = _stripe
+        stripe.api_key = STRIPE_SECRET_KEY
+    except ImportError:
+        stripe = None
 
 
 @router.post("/api/billing/portal")
 async def billing_portal(request: Request):
+    """Create a Stripe Customer Portal session for the authenticated tenant."""
+    if stripe is None:
+        raise HTTPException(status_code=501, detail="Stripe not installed or configured.")
     user_identity = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])
@@ -37,7 +56,7 @@ async def billing_portal(request: Request):
             email=request.headers.get("X-User-Email"),
         )
         stripe_customer_id = customer.id
-        await db.update_tenant_stripe(tenant_id, stripe_customer_id)
+        await db.set_stripe_customer_id(tenant_id, stripe_customer_id)
 
     session = stripe.billing_portal.Session.create(
         customer=stripe_customer_id,
@@ -49,12 +68,13 @@ async def billing_portal(request: Request):
 
 @router.post("/api/billing/webhook")
 async def stripe_webhook(request: Request):
+    """Receive Stripe webhook events. Handles subscription updates and checkout completion."""
     import json
 
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
-    if STRIPE_WEBHOOK_SECRET and sig_header:
+    if stripe is not None and STRIPE_WEBHOOK_SECRET and sig_header:
         try:
             event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
         except stripe.error.SignatureVerificationError:
@@ -67,7 +87,7 @@ async def stripe_webhook(request: Request):
     if event["type"].startswith("customer.subscription."):
         subscription = event["data"]["object"]
         customer_id = subscription.get("customer")
-        tenant = await db.get_tenant_by_stripe(customer_id)
+        tenant = await db.get_tenant_by_stripe_customer_id(customer_id)
         if tenant:
             plan = subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("lookup_key", "starter")
             await db.update_tenant_plan(UUID(tenant["id"]), plan)
@@ -77,6 +97,6 @@ async def stripe_webhook(request: Request):
         customer_id = session.get("customer")
         tenant_id = session.get("metadata", {}).get("tenant_id")
         if tenant_id and customer_id:
-            await db.update_tenant_stripe(UUID(tenant_id), customer_id)
+            await db.set_stripe_customer_id(UUID(tenant_id), customer_id)
 
     return {"status": "ok"}
