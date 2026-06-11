@@ -6,6 +6,7 @@ The PUT endpoint accepts partial updates via TenantSettingsUpdate model.
 
 from __future__ import annotations
 
+import platform
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +16,18 @@ from copilot_soc.api.deps import get_db
 from copilot_soc.models import TenantSettingsUpdate
 
 router = APIRouter(tags=["settings"])
+
+_collector_start_cb = None
+_collector_stop_cb = None
+_collector_is_running_cb = None
+
+
+def register_collector_callbacks(start_cb, stop_cb, is_running_cb):
+    """Called once at startup by main.py to wire the collector lifecycle."""
+    global _collector_start_cb, _collector_stop_cb, _collector_is_running_cb
+    _collector_start_cb = start_cb
+    _collector_stop_cb = stop_cb
+    _collector_is_running_cb = is_running_cb
 
 
 @router.get("/api/settings")
@@ -33,8 +46,16 @@ async def get_settings(request: Request):
             clean[k] = None
 
     clean["sampleGenerationEnabled"] = clean.get("sample_events_enabled", True)
-    import platform
-    return {"settings": clean, "is_windows": platform.system() == "Windows", "collector_status": None}
+
+    collector_running = False
+    if _collector_is_running_cb:
+        collector_running = _collector_is_running_cb()
+
+    return {
+        "settings": clean,
+        "is_windows": platform.system() == "Windows",
+        "collector_status": {"running": collector_running} if collector_running else None,
+    }
 
 
 @router.put("/api/settings")
@@ -52,6 +73,12 @@ async def update_settings(request: Request):
     if changes:
         await db.update_settings(tenant_id, changes)
 
+    if "monitor_windows_events" in changes:
+        if changes["monitor_windows_events"] and _collector_start_cb:
+            _collector_start_cb()
+        elif not changes["monitor_windows_events"] and _collector_stop_cb:
+            _collector_stop_cb()
+
     settings = await db.get_settings(tenant_id)
     sensitive_keys = {"llm_api_key", "webhook_secret"}
     clean = {k: v for k, v in settings.items() if k not in sensitive_keys}
@@ -59,5 +86,13 @@ async def update_settings(request: Request):
         clean[k] = "********" if settings.get(k) else None
 
     clean["sampleGenerationEnabled"] = clean.get("sample_events_enabled", True)
-    import platform
-    return {"settings": clean, "is_windows": platform.system() == "Windows", "collector_status": None}
+
+    collector_running = False
+    if _collector_is_running_cb:
+        collector_running = _collector_is_running_cb()
+
+    return {
+        "settings": clean,
+        "is_windows": platform.system() == "Windows",
+        "collector_status": {"running": collector_running} if collector_running else None,
+    }

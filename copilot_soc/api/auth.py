@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -149,3 +150,13 @@ async def get_me(request: Request):
     """Return current user identity from the session cookie."""
     user = require_auth(request)
     return {"user_id": user["user_id"], "tenant_id": user["tenant_id"], "role": user["role"]}
+
+
+async def _resolve_tenant(db) -> Optional[UUID]:
+    """Return the first tenant_id from the DB (used by background collector)."""
+    import asyncpg
+    try:
+        row = await db.pool.fetchrow("SELECT id FROM tenants LIMIT 1")
+        return row["id"] if row else None
+    except Exception:
+        return None

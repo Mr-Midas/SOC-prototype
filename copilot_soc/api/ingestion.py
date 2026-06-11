@@ -183,3 +183,47 @@ async def ingest_endpoint_event_legacy(request: Request):
         logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {"status": "accepted", "id": str(alert["id"])}
+
+
+async def _ingest_event(db, tenant_id: UUID, event: dict) -> dict:
+    """Ingest a single collector event directly into the DB (bypasses HTTP)."""
+    event_type = str(event.get("event_type", "local_event")).strip().lower().replace(" ", "_")
+    rule_name = f"Endpoint Event: {event_type}"
+    summary = event.get("summary", "Endpoint event received.")
+
+    if not await db.check_alert_limit(tenant_id):
+        return {"status": "rate_limited"}
+
+    alert = await db.create_alert(
+        tenant_id=tenant_id,
+        source="Local Endpoint Agent",
+        rule_name=rule_name,
+        summary=summary,
+        raw_alert={
+            "alert_id": str(uuid4()),
+            "generated_at": None,
+            "scenario_id": "endpoint_detection",
+            "source": "Local Endpoint Agent",
+            "rule_name": rule_name,
+            "summary": summary,
+            "mitre_tactic": "Execution",
+            "affected_user": event.get("username"),
+            "affected_host": event.get("host_id"),
+            "source_ip": event.get("source_ip"),
+            "process_name": event.get("process_name"),
+            "command_line": event.get("command_line"),
+            "event_type": event_type,
+            "indicators": event.get("indicators", []),
+            "telemetry": event.get("telemetry", []),
+            "metadata": event.get("metadata", {}),
+            "analyst_supplied_severity": event.get("severity_hint"),
+        },
+    )
+
+    await db.increment_alert_usage(tenant_id)
+    try:
+        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+    except Exception:
+        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
+
+    return {"status": "accepted", "id": str(alert["id"])}

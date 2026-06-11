@@ -10,7 +10,9 @@ The database connection is NOT established here — it is lazily created by
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Optional
 
 import structlog
 from fastapi import FastAPI, Request
@@ -81,6 +83,30 @@ else:
 async def startup():
     logger.info("copilot_soc_starting", env=settings.environment)
     await _bootstrap_database()
+    _register_collector_callbacks()
+
+
+def _register_collector_callbacks():
+    """Wire settings toggle to collector start/stop."""
+    from copilot_soc.api.settings import register_collector_callbacks
+    register_collector_callbacks(
+        start_cb=_start_collector,
+        stop_cb=_stop_collector,
+        is_running_cb=lambda: _collector_task is not None and not _collector_task.done(),
+    )
+
+
+def _start_collector():
+    global _collector_task
+    if _collector_task and not _collector_task.done():
+        return
+    _collector_task = asyncio.create_task(_collector_loop())
+    logger.info("collector_task_started")
+
+
+def _stop_collector():
+    _collector_stop_event.set()
+    logger.info("collector_stop_requested")
 
 
 async def _bootstrap_database():
@@ -162,12 +188,71 @@ async def _bootstrap_database():
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Gracefully close the database pool on shutdown."""
+    """Gracefully close the database pool and stop the collector."""
+    _collector_stop_event.set()
     try:
         await close_db()
         logger.info("database_disconnected")
     except Exception:
         pass
+
+
+_collector_stop_event: asyncio.Event = asyncio.Event()
+_collector_task: Optional[asyncio.Task] = None
+
+
+async def _collector_loop():
+    """Background task: polls Windows Security / Sysmon logs and feeds events into the pipeline."""
+    import platform
+    if platform.system().lower() != "windows":
+        logger.info("collector_skipped", reason="not_windows")
+        return
+
+    try:
+        from copilot_soc.api.deps import get_db
+        from copilot_soc.api.auth import _resolve_tenant
+    except ImportError:
+        logger.warning("collector_import_failed")
+        return
+
+    logger.info("collector_started")
+    while not _collector_stop_event.is_set():
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from collector import collect_pending_events
+
+            events = await asyncio.to_thread(collect_pending_events, lookback_seconds=120)
+            if events:
+                db = await get_db()
+                tenant_id = await _resolve_tenant(db)
+                if tenant_id:
+                    for ev in events:
+                        try:
+                            from copilot_soc.api.ingestion import _ingest_event
+                            await _ingest_event(db, tenant_id, ev)
+                        except Exception as e:
+                            logger.warning("collector_event_failed", error=str(e)[:100])
+                    logger.info("collector_batch", count=len(events))
+        except Exception as exc:
+            logger.warning("collector_poll_failed", error=str(exc)[:200])
+
+        try:
+            await asyncio.wait_for(_collector_stop_event.wait(), timeout=30)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+    logger.info("collector_stopped")
+
+
+@app.get("/api/collector/status")
+async def collector_status(request: Request):
+    """Return whether the collector background task is running."""
+    from copilot_soc.api.auth import require_auth
+    require_auth(request)
+    running = _collector_task is not None and not _collector_task.done()
+    return {"running": running, "platform": __import__("platform").system()}
 
 
 @app.get("/api/health")

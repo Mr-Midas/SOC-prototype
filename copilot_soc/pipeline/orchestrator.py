@@ -113,6 +113,11 @@ async def process_alert(
     if isinstance(raw_alert, str):
         raw_alert = json.loads(raw_alert)
 
+    from copilot_soc.pipeline.enrichment import enrich_alert
+    raw_alert = await enrich_alert(raw_alert, settings)
+    if raw_alert.get("enrichment", {}).get("summary"):
+        logger.info("ip_enrichment", alert_id=str(alert_id), summary=raw_alert["enrichment"]["summary"])
+
     min_risk_for_ai = int(settings.get("min_risk_for_ai", 70))
 
     # ── Step 1: Manager / Classify ─────────────────────────────
