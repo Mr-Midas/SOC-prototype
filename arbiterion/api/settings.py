@@ -1,4 +1,4 @@
-"""Tenant settings CRUD — LLM provider, model, webhook secret, feature toggles.
+﻿"""Tenant settings CRUD â€” LLM provider, model, webhook secret, feature toggles.
 
 Sensitive values (llm_api_key, webhook_secret) are masked in GET responses.
 The PUT endpoint accepts partial updates via TenantSettingsUpdate model.
@@ -11,9 +11,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from copilot_soc.api.auth import require_auth
-from copilot_soc.api.deps import get_db
-from copilot_soc.models import TenantSettingsUpdate
+from arbiterion.api.auth import require_auth
+from arbiterion.api.deps import get_db
+from arbiterion.models import TenantSettingsUpdate
 
 router = APIRouter(tags=["settings"])
 
@@ -96,3 +96,4 @@ async def update_settings(request: Request):
         "is_windows": platform.system() == "Windows",
         "collector_status": {"running": collector_running} if collector_running else None,
     }
+

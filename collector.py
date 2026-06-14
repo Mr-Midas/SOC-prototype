@@ -1,5 +1,5 @@
 """
-Tiny Windows event collector for Endpoint SOC Copilot.
+Tiny Windows event collector for Arbiterion.
 
 Tails Security + Sysmon logs, applies local noise filters, and POSTs suspicious
 events to /api/ingest/endpoint-event with optional HMAC signing.
@@ -401,7 +401,7 @@ def poll_once(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Collect Windows Security/Sysmon events for Endpoint SOC Copilot.")
+    parser = argparse.ArgumentParser(description="Collect Windows Security/Sysmon events for Arbiterion.")
     parser.add_argument(
         "--endpoint",
         default=os.getenv("COLLECTOR_ENDPOINT", "http://127.0.0.1:8000/api/ingest/endpoint-event"),

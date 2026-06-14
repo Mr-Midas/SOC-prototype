@@ -1,4 +1,4 @@
--- Copilot SOC PostgreSQL Schema
+﻿-- Arbiterion PostgreSQL Schema
 -- Multi-tenant schema for the AI-powered SOC triage copilot.
 -- Every data row is scoped to a tenant_id for Phase 1; Phase 2 adds PostgreSQL RLS.
 -- Run against a fresh PostgreSQL 16+ database. The Docker Compose setup runs this
@@ -7,7 +7,7 @@
 -- pgcrypto provides gen_random_uuid() for UUID primary keys
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- ── Enums ──────────────────────────────────────────────────────────────────
+-- â”€â”€ Enums â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- PipelineState: tracks the 3-agent chain through its lifecycle.
 -- Each agent has a _failed state so retry logic can distinguish "retry" from "skip".
 CREATE TYPE pipeline_state AS ENUM (
@@ -50,7 +50,7 @@ CREATE TYPE plan_tier AS ENUM (
     'enterprise'
 );
 
--- ── Tenants ────────────────────────────────────────────────────────────────
+-- â”€â”€ Tenants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Top-level organizational unit. Every other table references this via tenant_id.
 -- alert_limit and alerts_used_today implement per-tenant daily rate limiting.
 CREATE TABLE tenants (
@@ -67,7 +67,7 @@ CREATE TABLE tenants (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── Users ──────────────────────────────────────────────────────────────────
+-- â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Each user belongs to exactly one tenant. email is unique per tenant.
 -- password_hash uses PBKDF2-HMAC-SHA256 (see api/auth.py).
 CREATE TABLE users (
@@ -81,7 +81,7 @@ CREATE TABLE users (
     UNIQUE(tenant_id, email)
 );
 
--- ── Alerts ─────────────────────────────────────────────────────────────────
+-- â”€â”€ Alerts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- The central table. Every alert passes through the pipeline and its state,
 -- agent outputs, and governor decision are stored in JSONB columns.
 -- The pipeline appends reasoning steps to reasoning_log as it progresses.
@@ -111,7 +111,7 @@ CREATE TABLE alerts (
 CREATE INDEX idx_alerts_tenant_created ON alerts(tenant_id, created_at DESC);
 CREATE INDEX idx_alerts_pipeline_state ON alerts(pipeline_state);
 
--- ── Approvals ──────────────────────────────────────────────────────────────
+-- â”€â”€ Approvals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Audit trail for every governor approve/reject action.
 CREATE TABLE approvals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -125,7 +125,7 @@ CREATE TABLE approvals (
 
 CREATE INDEX idx_approvals_alert ON approvals(alert_id);
 
--- ── Action Queue ───────────────────────────────────────────────────────────
+-- â”€â”€ Action Queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Approved containment actions are enqueued here. The Celery worker picks them
 -- up via SKIP LOCKED (see next_pending_action in postgres.py).
 CREATE TABLE action_queue (
@@ -142,7 +142,7 @@ CREATE TABLE action_queue (
 
 CREATE INDEX idx_action_queue_status ON action_queue(status);
 
--- ── Connectors ─────────────────────────────────────────────────────────────
+-- â”€â”€ Connectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Per-tenant connector configuration (Phase 2). Encrypted API keys/tokens.
 CREATE TABLE connectors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -154,7 +154,7 @@ CREATE TABLE connectors (
     UNIQUE(tenant_id, connector_type)
 );
 
--- ── Tenant Settings ────────────────────────────────────────────────────────
+-- â”€â”€ Tenant Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Per-tenant LLM provider config and feature toggles.
 -- llm_api_key is stored encrypted (via pgcrypto or app-level encryption in Phase 2).
 CREATE TABLE tenant_settings (
@@ -173,7 +173,7 @@ CREATE TABLE tenant_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── Stripe Events ──────────────────────────────────────────────────────────
+-- â”€â”€ Stripe Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Idempotent log of incoming Stripe webhook events. Prevents double-processing.
 CREATE TABLE stripe_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -184,7 +184,7 @@ CREATE TABLE stripe_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── Daily Usage ────────────────────────────────────────────────────────────
+-- â”€â”€ Daily Usage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 -- Hourly-resolution usage tracking per tenant (reserved for billing metering).
 CREATE TABLE daily_usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -194,3 +194,4 @@ CREATE TABLE daily_usage (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, alert_date)
 );
+

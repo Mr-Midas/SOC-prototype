@@ -1,9 +1,9 @@
-"""Tests for the pipeline orchestrator with mocked LLM and database.
+﻿"""Tests for the pipeline orchestrator with mocked LLM and database.
 
 Covers:
-- AI path: LLM returns valid JSON → pipeline uses AI output
-- Fallback path: LLM returns empty → pipeline uses deterministic fallback
-- No AI configured: api_key missing → pipeline uses deterministic fallback
+- AI path: LLM returns valid JSON â†’ pipeline uses AI output
+- Fallback path: LLM returns empty â†’ pipeline uses deterministic fallback
+- No AI configured: api_key missing â†’ pipeline uses deterministic fallback
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from copilot_soc.pipeline.orchestrator import process_alert
+from arbiterion.pipeline.orchestrator import process_alert
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def mock_db():
     db.get_settings = AsyncMock(return_value={
         "llm_provider": "openai",
         "llm_model": "gpt-4o-mini",
-        "llm_api_key": None,  # no AI key → forces fallback
+        "llm_api_key": None,  # no AI key â†’ forces fallback
         "use_ai_triage": True,
         "safe_mode": True,
         "min_risk_for_ai": 70,
@@ -55,7 +55,7 @@ def tenant_id() -> UUID:
 
 @pytest.mark.asyncio
 async def test_pipeline_uses_fallback_when_no_api_key(mock_db, alert_id, tenant_id):
-    """No API key configured → deterministic fallback is used for all three agents."""
+    """No API key configured â†’ deterministic fallback is used for all three agents."""
     result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
     assert result["pipeline_state"] == "completed"
     assert result["manager"]["severity"] == "Critical"
@@ -66,18 +66,18 @@ async def test_pipeline_uses_fallback_when_no_api_key(mock_db, alert_id, tenant_
 
 @pytest.mark.asyncio
 async def test_pipeline_fallback_when_ai_returns_empty(mock_db, alert_id, tenant_id):
-    """API key present but LLM returns empty string → fallback used."""
+    """API key present but LLM returns empty string â†’ fallback used."""
     mock_db.get_settings.return_value["llm_api_key"] = "sk-test"
     mock_db.get_settings.return_value["use_ai_triage"] = True
 
-    with patch("copilot_soc.pipeline.orchestrator.call_llm", new=AsyncMock(return_value="")):
+    with patch("arbiterion.pipeline.orchestrator.call_llm", new=AsyncMock(return_value="")):
         result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
     assert result["pipeline_state"] == "completed"
 
 
 @pytest.mark.asyncio
 async def test_pipeline_uses_ai_when_valid_json_returned(mock_db, alert_id, tenant_id):
-    """LLM returns valid JSON → pipeline uses AI outputs."""
+    """LLM returns valid JSON â†’ pipeline uses AI outputs."""
     mock_db.get_settings.return_value["llm_api_key"] = "sk-test"
     mock_db.get_settings.return_value["use_ai_triage"] = True
 
@@ -94,7 +94,7 @@ async def test_pipeline_uses_ai_when_valid_json_returned(mock_db, alert_id, tena
         '"operator_brief":"AI brief","pre_approval_checklist":["check1"]}'
     )
 
-    with patch("copilot_soc.pipeline.orchestrator.call_llm", new=AsyncMock(side_effect=[
+    with patch("arbiterion.pipeline.orchestrator.call_llm", new=AsyncMock(side_effect=[
         manager_json, triage_json, containment_json,
     ])):
         result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
@@ -108,10 +108,10 @@ async def test_pipeline_uses_ai_when_valid_json_returned(mock_db, alert_id, tena
 
 @pytest.mark.asyncio
 async def test_pipeline_fallback_on_bad_json(mock_db, alert_id, tenant_id):
-    """LLM returns invalid JSON → fallback used."""
+    """LLM returns invalid JSON â†’ fallback used."""
     mock_db.get_settings.return_value["llm_api_key"] = "sk-test"
 
-    with patch("copilot_soc.pipeline.orchestrator.call_llm", new=AsyncMock(return_value="not json at all")):
+    with patch("arbiterion.pipeline.orchestrator.call_llm", new=AsyncMock(return_value="not json at all")):
         result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
     assert result["pipeline_state"] == "completed"
     # fallback values for ransomware scenario
@@ -120,11 +120,11 @@ async def test_pipeline_fallback_on_bad_json(mock_db, alert_id, tenant_id):
 
 @pytest.mark.asyncio
 async def test_pipeline_fallback_when_ai_off(mock_db, alert_id, tenant_id):
-    """use_ai_triage=False → always use fallback even with API key present."""
+    """use_ai_triage=False â†’ always use fallback even with API key present."""
     mock_db.get_settings.return_value["llm_api_key"] = "sk-test"
     mock_db.get_settings.return_value["use_ai_triage"] = False
 
-    with patch("copilot_soc.pipeline.orchestrator.call_llm") as mock_llm:
+    with patch("arbiterion.pipeline.orchestrator.call_llm") as mock_llm:
         result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
         mock_llm.assert_not_called()
     assert result["pipeline_state"] == "completed"
@@ -137,3 +137,4 @@ async def test_pipeline_alert_not_found(mock_db, alert_id, tenant_id):
     result = await process_alert(mock_db, alert_id, tenant_id, mock_db.get_settings.return_value)
     assert "error" in result
     assert result["error"] == "alert not found"
+

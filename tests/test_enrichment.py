@@ -1,10 +1,10 @@
-"""Tests for the IP reputation enrichment module."""
+﻿"""Tests for the IP reputation enrichment module."""
 
 import os
 import pytest
 from unittest.mock import patch, MagicMock
 
-from copilot_soc.pipeline.enrichment import (
+from arbiterion.pipeline.enrichment import (
     _is_public_ip,
     _summarize_enrichments,
     enrich_alert,
@@ -84,7 +84,7 @@ class TestEnrichAlert:
         settings = {"threat_intel_enabled": True}
 
         with patch.dict(os.environ, {"ABUSEIPDB_API_KEY": "test-key-123", "OTX_API_KEY": ""}):
-            with patch("copilot_soc.pipeline.enrichment._lookup_abuseipdb") as mock_lookup:
+            with patch("arbiterion.pipeline.enrichment._lookup_abuseipdb") as mock_lookup:
                 mock_lookup.return_value = {"abuseConfidenceScore": 90, "totalReports": 500, "usageType": "Data Center", "countryCode": "US"}
                 result = await enrich_alert(raw, settings)
                 mock_lookup.assert_called_once_with("8.8.8.8", "test-key-123")
@@ -96,7 +96,7 @@ class TestEnrichAlert:
         settings = {"threat_intel_enabled": True}
 
         with patch.dict(os.environ, {"ABUSEIPDB_API_KEY": "", "OTX_API_KEY": "otx-key-456"}):
-            with patch("copilot_soc.pipeline.enrichment._lookup_otx") as mock_lookup:
+            with patch("arbiterion.pipeline.enrichment._lookup_otx") as mock_lookup:
                 mock_lookup.return_value = {"reputation": -5, "pulse_count": 10, "country_name": "Australia"}
                 result = await enrich_alert(raw, settings)
                 mock_lookup.assert_called_once_with("1.1.1.1", "otx-key-456")
@@ -111,3 +111,4 @@ class TestEnrichAlert:
             result = await enrich_alert(raw, settings)
             assert result["enrichment"]["skipped"] is False
             assert result["enrichment"]["results"] == {}
+

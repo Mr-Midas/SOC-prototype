@@ -1,10 +1,10 @@
-"""Tests for the deterministic fallback logic — all six canonical attack scenarios plus generic/generic catch-all."""
+﻿"""Tests for the deterministic fallback logic â€” all six canonical attack scenarios plus generic/generic catch-all."""
 
 from __future__ import annotations
 
 import pytest
 
-from copilot_soc.pipeline.fallback import (
+from arbiterion.pipeline.fallback import (
     fallback_containment,
     fallback_manager,
     fallback_triage,
@@ -29,7 +29,7 @@ def _make_alert(scenario_id: str, **overrides) -> dict:
     return base
 
 
-# ── Manager Agent ──────────────────────────────────────────────────────────
+# â”€â”€ Manager Agent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestFallbackManager:
     def test_ransomware_routing(self):
@@ -97,7 +97,7 @@ class TestFallbackManager:
         assert 0 <= decision.risk_score <= 100
 
 
-# ── Triage Agent ───────────────────────────────────────────────────────────
+# â”€â”€ Triage Agent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestFallbackTriage:
     def test_ransomware_triage(self):
@@ -147,7 +147,7 @@ class TestFallbackTriage:
         assert len(finding.investigation_summary) > 10
 
 
-# ── Containment Agent ──────────────────────────────────────────────────────
+# â”€â”€ Containment Agent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestFallbackContainment:
     def test_ransomware_containment(self):
@@ -227,3 +227,4 @@ class TestFallbackContainment:
         triage = fallback_triage(alert, manager)
         plan = fallback_containment(alert, manager, triage)
         assert 10 < len(plan.operator_brief) < 300
+

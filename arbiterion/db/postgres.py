@@ -1,6 +1,6 @@
-"""asyncpg-based Database class with full CRUD for the multi-tenant schema.
+﻿"""asyncpg-based Database class with full CRUD for the multi-tenant schema.
 
-Every method is tenant-scoped. The pool is lazily initialised via get_db() in deps.py —
+Every method is tenant-scoped. The pool is lazily initialised via get_db() in deps.py â€”
 the app boots without PostgreSQL and only errors when a route needs the database.
 """
 
@@ -19,8 +19,8 @@ import asyncpg
 class Database:
     """Thin wrapper around an asyncpg connection pool.
 
-    All public methods map 1:1 to SQL queries. We keep it simple — no ORM,
-    no query builder — because every query is tenant-scoped and the schema
+    All public methods map 1:1 to SQL queries. We keep it simple â€” no ORM,
+    no query builder â€” because every query is tenant-scoped and the schema
     is small enough to manage by hand.
     """
 
@@ -28,7 +28,7 @@ class Database:
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
-        from copilot_soc.config import settings as _cfg
+        from arbiterion.config import settings as _cfg
         dsn = os.getenv("DATABASE_URL") or _cfg.database_url
         if not dsn:
             raise ConnectionError("DATABASE_URL not set. Run `docker compose up -d` to start PostgreSQL.")
@@ -39,14 +39,14 @@ class Database:
             await self.pool.close()
 
     async def _init_schema(self) -> None:
-        """Run schema.sql on startup (idempotent — uses IF NOT EXISTS)."""
+        """Run schema.sql on startup (idempotent â€” uses IF NOT EXISTS)."""
         schema_path = Path(__file__).parent / "schema.sql"
         if not schema_path.exists():
             return
         async with self.pool.acquire() as conn:
             await conn.execute(schema_path.read_text())
 
-    # ── Tenants ────────────────────────────────────────────────
+    # â”€â”€ Tenants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def create_tenant(self, name: str, slug: str, plan_tier: str = "starter") -> dict[str, Any]:
         """Create a tenant row + default tenant_settings in one transaction."""
@@ -125,7 +125,7 @@ class Database:
                 tenant_id,
             )
 
-    # ── Users ──────────────────────────────────────────────────
+    # â”€â”€ Users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def create_user(self, tenant_id: UUID, email: str, password_hash: str, role: str = "analyst") -> dict[str, Any]:
         """Register a new user under a tenant. password_hash is PBKDF2-HMAC-SHA256."""
@@ -155,7 +155,7 @@ class Database:
             row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
             return dict(row) if row else None
 
-    # ── Alerts ─────────────────────────────────────────────────
+    # â”€â”€ Alerts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def create_alert(
         self,
@@ -318,7 +318,7 @@ class Database:
                             co = {}
                     await self.enqueue_action(tenant_id, alert_id, co)
 
-    # ── Action Queue ───────────────────────────────────────────
+    # â”€â”€ Action Queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def enqueue_action(
         self,
@@ -361,7 +361,7 @@ class Database:
                 status, json.dumps(result), action_id,
             )
 
-    # ── Tenant Settings ────────────────────────────────────────
+    # â”€â”€ Tenant Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def get_settings(self, tenant_id: UUID) -> dict[str, Any]:
         """Fetch LLM config + feature toggles for a tenant. Creates defaults on first access."""
@@ -399,7 +399,7 @@ class Database:
             await conn.execute(query, *args)
         return await self.get_settings(tenant_id)
 
-    # ── Stripe Events ──────────────────────────────────────────
+    # â”€â”€ Stripe Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     async def record_stripe_event(self, event_id: str, event_type: str, body: dict[str, Any]) -> bool:
         """Idempotent insert: returns False if the stripe_event_id was already recorded."""
@@ -413,9 +413,9 @@ class Database:
             except asyncpg.UniqueViolationError:
                 return False
 
-    # ── Connectors ──────────────────────────────────────────────
+    # â”€â”€ Connectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    # ── Connectors (Phase 2) ────────────────────────────────────
+    # â”€â”€ Connectors (Phase 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # These are stubs for CrowdStrike / Splunk native connectors.
     # config_encrypted stores API keys; decryption is deferred to Phase 2.
 
@@ -447,3 +447,4 @@ class Database:
                 tenant_id, connector_type,
             )
             return dict(row) if row else None
+

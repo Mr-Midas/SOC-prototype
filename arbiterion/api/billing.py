@@ -1,4 +1,4 @@
-"""Stripe billing integration — customer portal session and webhook handling.
+﻿"""Stripe billing integration â€” customer portal session and webhook handling.
 
 The ``/api/billing/portal`` endpoint creates a Stripe Customer Portal session so
 tenants can manage their subscription without leaving the app.
@@ -15,15 +15,15 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from copilot_soc.api.auth import require_auth
-from copilot_soc.api.deps import get_db
+from arbiterion.api.auth import require_auth
+from arbiterion.api.deps import get_db
 
 router = APIRouter(tags=["billing"])
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-# Import stripe only if configured — the app boots without it
+# Import stripe only if configured â€” the app boots without it
 stripe = None
 if STRIPE_SECRET_KEY:
     try:
@@ -100,3 +100,4 @@ async def stripe_webhook(request: Request):
             await db.set_stripe_customer_id(UUID(tenant_id), customer_id)
 
     return {"status": "ok"}
+

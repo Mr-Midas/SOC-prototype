@@ -1,4 +1,4 @@
-"""Alert pipeline orchestrator — coordinates the 3-agent chain.
+﻿"""Alert pipeline orchestrator â€” coordinates the 3-agent chain.
 
 For every ingested alert the orchestrator:
   1. Runs the Manager agent (classify + severity score)
@@ -18,20 +18,20 @@ from uuid import UUID
 
 import structlog
 
-from copilot_soc.db.postgres import Database
-from copilot_soc.llm.client import call_llm, resolve_model_key
-from copilot_soc.models import (
+from arbiterion.db.postgres import Database
+from arbiterion.llm.client import call_llm, resolve_model_key
+from arbiterion.models import (
     ContainmentPlan,
     ManagerDecision,
     ReasoningStep,
     TriageFinding,
 )
-from copilot_soc.pipeline.fallback import (
+from arbiterion.pipeline.fallback import (
     fallback_containment,
     fallback_manager,
     fallback_triage,
 )
-from copilot_soc.pipeline.state_machine import PipelineState, StateMachine, run_with_retry
+from arbiterion.pipeline.state_machine import PipelineState, StateMachine, run_with_retry
 
 logger = structlog.get_logger()
 
@@ -113,14 +113,14 @@ async def process_alert(
     if isinstance(raw_alert, str):
         raw_alert = json.loads(raw_alert)
 
-    from copilot_soc.pipeline.enrichment import enrich_alert
+    from arbiterion.pipeline.enrichment import enrich_alert
     raw_alert = await enrich_alert(raw_alert, settings)
     if raw_alert.get("enrichment", {}).get("summary"):
         logger.info("ip_enrichment", alert_id=str(alert_id), summary=raw_alert["enrichment"]["summary"])
 
     min_risk_for_ai = int(settings.get("min_risk_for_ai", 70))
 
-    # ── Step 1: Manager / Classify ─────────────────────────────
+    # â”€â”€ Step 1: Manager / Classify â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sm.transition_to(PipelineState.CLASSIFYING)
     await db.update_alert_pipeline(alert_id, tenant_id, pipeline_state="classifying")
 
@@ -159,7 +159,7 @@ async def process_alert(
         reasoning_log=reasoning_log,
     )
 
-    # ── Step 2: Triage ─────────────────────────────────────────
+    # â”€â”€ Step 2: Triage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sm.transition_to(PipelineState.TRIAGING)
     await db.update_alert_pipeline(alert_id, tenant_id, pipeline_state="triaging")
 
@@ -191,7 +191,7 @@ async def process_alert(
         reasoning_log=reasoning_log,
     )
 
-    # ── Step 3: Containment ────────────────────────────────────
+    # â”€â”€ Step 3: Containment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sm.transition_to(PipelineState.PLANNING)
     await db.update_alert_pipeline(alert_id, tenant_id, pipeline_state="planning")
 
@@ -226,7 +226,7 @@ async def process_alert(
         "output": {"ai_used": ai_used, "min_risk_for_ai": min_risk_for_ai},
     })
 
-    # ── Complete ───────────────────────────────────────────────
+    # â”€â”€ Complete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sm.transition_to(PipelineState.COMPLETED)
     await db.update_alert_pipeline(
         alert_id, tenant_id,
@@ -253,3 +253,4 @@ async def process_alert(
         "triage": triage.model_dump(),
         "containment": containment.model_dump(),
     }
+

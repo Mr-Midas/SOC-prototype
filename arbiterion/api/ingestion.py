@@ -1,4 +1,4 @@
-"""Alert ingestion via webhook (primary path) or local endpoint events.
+﻿"""Alert ingestion via webhook (primary path) or local endpoint events.
 
 The primary endpoint is ``POST /api/v1/ingest/alert``.
 Backward-compatible shims exist at ``/api/ingest/webhook`` and
@@ -6,7 +6,7 @@ Backward-compatible shims exist at ``/api/ingest/webhook`` and
 
 Every ingested alert is dispatched to Celery for async pipeline processing.
 If Celery / Redis is unreachable the alert is still persisted and the request
-returns HTTP 202 — processing resumes when the worker comes back.
+returns HTTP 202 â€” processing resumes when the worker comes back.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
-from copilot_soc.api.deps import get_db
-from copilot_soc.api.auth import require_auth
-from copilot_soc.models import IngestionRequest
-from copilot_soc.worker.tasks import run_alert_pipeline
+from arbiterion.api.deps import get_db
+from arbiterion.api.auth import require_auth
+from arbiterion.models import IngestionRequest
+from arbiterion.worker.tasks import run_alert_pipeline
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["ingestion"])
@@ -227,3 +227,4 @@ async def _ingest_event(db, tenant_id: UUID, event: dict) -> dict:
         logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {"status": "accepted", "id": str(alert["id"])}
+

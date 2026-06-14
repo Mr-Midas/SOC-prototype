@@ -1,5 +1,5 @@
-ENDPOINT SOC COPILOT - GETTING STARTED (5 MINUTES)
-=================================================
+ARBITERION - GETTING STARTED (5 MINUTES)
+=========================================
 
 WHAT THIS DOES
 --------------
@@ -16,7 +16,7 @@ STEP 1 - INSTALL (ONE TIME)
 
 STEP 2 - START THE APP
 ----------------------
-Double-click: Start Endpoint SOC Copilot.bat
+Double-click: Start Arbiterion.bat
 
 Your browser opens automatically.
 Login:
@@ -58,13 +58,13 @@ TROUBLESHOOTING
 ---------------
 - "No alerts yet" -> Turn ON "Watch This Computer" in Control Panel
 - Login fails -> use admin / ChangeMe123!
-- Still stuck -> run Install.bat again, then Start Endpoint SOC Copilot.bat
+- Still stuck -> run Install.bat again, then Start Arbiterion.bat
 
 
 TO SELL / SHIP AS ZIP
 ---------------------
 Zip this entire folder. Customer runs:
   1) Install.bat
-  2) Start Endpoint SOC Copilot.bat
+  2) Start Arbiterion.bat
 
 Later you can wrap launcher.py into a single .exe with PyInstaller.

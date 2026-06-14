@@ -1,4 +1,4 @@
-"""Deterministic fallback logic for all three pipeline agents.
+﻿"""Deterministic fallback logic for all three pipeline agents.
 
 When LiteLLM is unavailable, the API key is missing, the model returns garbage
 JSON, or the confidence threshold is not met, these functions produce safe defaults.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from copilot_soc.models import ContainmentPlan, ManagerDecision, TriageFinding
+from arbiterion.models import ContainmentPlan, ManagerDecision, TriageFinding
 
 
 def fallback_manager(raw_alert: dict[str, Any]) -> ManagerDecision:
@@ -220,3 +220,4 @@ def fallback_containment(raw_alert: dict[str, Any], manager: ManagerDecision, tr
 
 def source_ip(raw_alert: dict[str, Any]) -> str:
     return raw_alert.get("source_ip") or "unknown-ip"
+

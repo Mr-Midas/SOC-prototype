@@ -1922,7 +1922,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Endpoint SOC Copilot",
+    title="Arbiterion",
     description="Single-endpoint security triage with human-approved response actions.",
     version="2.0.0",
     lifespan=lifespan,

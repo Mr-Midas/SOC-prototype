@@ -1,12 +1,12 @@
-# Copilot SOC
+﻿# Arbiterion
 
-AI-powered SOC triage copilot — multi-tenant SaaS backend (Phase 1).
+AI-powered SOC triage platform — multi-tenant SaaS backend (Phase 1).
 
-Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager → Triage → Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
+Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager â†’ Triage â†’ Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
 
-## Quick Start (Windows — One-Click)
+## Quick Start (Windows â€” One-Click)
 
-Double-click **`Start Endpoint SOC Copilot.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
+Double-click **`Start Arbiterion.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
 
 Or manually:
 
@@ -23,14 +23,14 @@ pip install -r requirements.txt
 # 4. Set up environment (copy defaults)
 copy .env.example .env
 
-# 5. Start the app (no Postgres required for dev — boots instantly)
-uvicorn copilot_soc.main:app --reload
+# 5. Start the app (no Postgres required for dev â€” boots instantly)
+uvicorn arbiterion.main:app --reload
 
 # 6. Open in browser
 start http://127.0.0.1:8000
 ```
 
-> **Note**: The `.bat` files (`Install.bat`, `Start Endpoint SOC Copilot.bat`) and `launcher.py` are legacy convenience wrappers. They work with the refactored backend.
+> **Note**: The `.bat` files (`Install.bat`, `Start Arbiterion.bat`) and `launcher.py` are legacy convenience wrappers. They work with the refactored backend.
 
 ## Quick Start (Linux / macOS)
 
@@ -39,7 +39,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-uvicorn copilot_soc.main:app --reload
+uvicorn arbiterion.main:app --reload
 ```
 
 ## Full Stack with Docker
@@ -56,22 +56,22 @@ This starts: FastAPI app (`:8000`), Celery worker, PostgreSQL 16, Redis 7.
 ## Architecture
 
 ```
-                      ┌──────────────┐
-        Webhook ─────►│  FastAPI app  │──► Celery Worker ──► Agent Pipeline
-                      │  (stateless)  │                        │
-                      └──────┬───────┘                    ┌────┴────┐
-                             │                            │ Manager │
-                      ┌──────┴──────┐                     ├─────────┤
-                      │  PostgreSQL │                     │ Triage  │
-                      │  (multi-    │                     ├─────────┤
-                      │   tenant)   │                     │Contain- │
-                      └─────────────┘                     │ ment    │
-                             ▲                            └────┬────┘
-                      ┌──────┴──────┐                         │
-                      │    Redis    │                   ┌──────┴──────┐
-                      │  (Celery    │                   │   Governor  │
-                      │   broker)   │                   │  (approval) │
-                      └─────────────┘                   └─────────────┘
+                      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        Webhook â”€â”€â”€â”€â”€â–ºâ”‚  FastAPI app  â”‚â”€â”€â–º Celery Worker â”€â”€â–º Agent Pipeline
+                      â”‚  (stateless)  â”‚                        â”‚
+                      â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜                    â”Œâ”€â”€â”€â”€â”´â”€â”€â”€â”€â”
+                             â”‚                            â”‚ Manager â”‚
+                      â”Œâ”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”                     â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+                      â”‚  PostgreSQL â”‚                     â”‚ Triage  â”‚
+                      â”‚  (multi-    â”‚                     â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+                      â”‚   tenant)   â”‚                     â”‚Contain- â”‚
+                      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                     â”‚ ment    â”‚
+                             â–²                            â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜
+                      â”Œâ”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”                         â”‚
+                      â”‚    Redis    â”‚                   â”Œâ”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”
+                      â”‚  (Celery    â”‚                   â”‚   Governor  â”‚
+                      â”‚   broker)   â”‚                   â”‚  (approval) â”‚
+                      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ## API Routes
@@ -96,19 +96,19 @@ This starts: FastAPI app (`:8000`), Celery worker, PostgreSQL 16, Redis 7.
 Copy `.env.example` to `.env` and configure:
 
 ```env
-# Database (PostgreSQL — app boots without it via graceful error message)
-DATABASE_URL=postgresql://copilot:copilot@localhost:5432/copilot_soc
+# Database (PostgreSQL â€” app boots without it via graceful error message)
+DATABASE_URL=postgresql://arbiterion:arbiterion@localhost:5432/arbiterion
 
 # Redis (required for Celery worker)
 REDIS_URL=redis://localhost:6379/0
 
-# Session secret — change to random 64-char string
+# Session secret â€” change to random 64-char string
 SESSION_SECRET=change-this-to-a-random-64-char-string
 
-# LLM provider (optional — falls back to deterministic logic if unset)
+# LLM provider (optional â€” falls back to deterministic logic if unset)
 # Set LLM_API_KEY via settings API or tenant_settings table
 
-# Stripe (optional — for billing portal)
+# Stripe (optional â€” for billing portal)
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 
@@ -124,8 +124,8 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 
 After running `python scripts/seed.py`:
 
-- Email: `admin@copilot-soc.local`
-- Password: `admin123`
+- Email: `admin@arbiterion.local`
+- Password: `ChangeMe123!`
 
 ## Ingesting Alerts
 
@@ -156,3 +156,4 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/ingest/alert `
 | LLM | Deterministic fallback + optional AI | Full AI pipeline |
 | Frontend | React (Vite + Tailwind) | Same + RBAC |
 | Target | ~8 weeks | ~14 weeks total |
+

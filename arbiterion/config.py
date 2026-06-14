@@ -1,7 +1,7 @@
-"""Centralised app config loaded from environment variables.
+﻿"""Centralised app config loaded from environment variables.
 
 All env-var reading happens in one place so every other module can
-import `from copilot_soc.config import settings` without calling os.getenv.
+import `from arbiterion.config import settings` without calling os.getenv.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Optional
 
 class Settings:
     # Database
-    database_url: str = os.getenv("DATABASE_URL", "postgresql://copilot:copilot@localhost:5432/copilot_soc")
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://arbiterion:arbiterion@localhost:5432/arbiterion")
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     # Auth
@@ -39,3 +39,4 @@ class Settings:
 
 
 settings = Settings()
+

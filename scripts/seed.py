@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""Bootstrap the first tenant and admin user for Copilot SOC."""
+﻿#!/usr/bin/env python3
+"""Bootstrap the first tenant and admin user for Arbiterion."""
 
 import asyncio
 import hashlib
@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import asyncpg
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://copilot:copilot@localhost:5432/copilot_soc")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://arbiterion:arbiterion@localhost:5432/arbiterion")
 
 
 def hash_password(password: str) -> str:
@@ -33,10 +33,10 @@ async def seed():
     # Check if already seeded
     existing = await conn.fetchrow(
         "SELECT id FROM users WHERE email = $1",
-        "admin@copilot-soc.local",
+        "admin@arbiterion.local",
     )
     if existing:
-        print("Already seeded — nothing to do.")
+        print("Already seeded â€” nothing to do.")
         await conn.close()
         return
 
@@ -57,7 +57,7 @@ async def seed():
     await conn.execute(
         """
         INSERT INTO users (id, tenant_id, email, password_hash, role)
-        VALUES ($1, $2, 'admin@copilot-soc.local', $3, 'admin')
+        VALUES ($1, $2, 'admin@arbiterion.local', $3, 'admin')
         """,
         admin_id, tenant_id, password_hash,
     )
@@ -72,7 +72,7 @@ async def seed():
 
     print(f"Tenant ID:    {tenant_id}")
     print(f"Admin ID:     {admin_id}")
-    print(f"Email:        admin@copilot-soc.local")
+    print(f"Email:        admin@arbiterion.local")
     print(f"Password:     ChangeMe123!")
     print(f"API Key:      {api_key}")
     print(f"Webhook Key:  {webhook_secret}")
@@ -82,3 +82,4 @@ async def seed():
 
 if __name__ == "__main__":
     asyncio.run(seed())
+

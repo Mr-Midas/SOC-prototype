@@ -1,10 +1,10 @@
-"""Celery tasks for the alert pipeline and action queue consumer.
+﻿"""Celery tasks for the alert pipeline and action queue consumer.
 
-``run_alert_pipeline`` — called by ingestion endpoints via `.delay()`.
+``run_alert_pipeline`` â€” called by ingestion endpoints via `.delay()`.
 Runs the full 3-agent pipeline inside an async event loop (Celery is sync,
 so we create a new loop per task invocation).
 
-``process_action_queue`` — periodic task (or manually triggered) that picks
+``process_action_queue`` â€” periodic task (or manually triggered) that picks
 the next pending action and either executes it via a webhook or logs it as a
 dry run (controlled by the CONNECTOR_MODE env var).
 """
@@ -18,9 +18,9 @@ from uuid import UUID
 import httpx
 import structlog
 
-from copilot_soc.db.postgres import Database
-from copilot_soc.pipeline.orchestrator import process_alert
-from copilot_soc.worker.celery_app import celery_app
+from arbiterion.db.postgres import Database
+from arbiterion.pipeline.orchestrator import process_alert
+from arbiterion.worker.celery_app import celery_app
 
 logger = structlog.get_logger()
 
@@ -43,7 +43,7 @@ def run_alert_pipeline(
     alert_id_str: str,
     tenant_id_str: str,
 ) -> dict:
-    """Celery task: runs the full pipeline (Manager→Triage→Containment) asynchronously.
+    """Celery task: runs the full pipeline (Managerâ†’Triageâ†’Containment) asynchronously.
 
     Called via ``run_alert_pipeline.delay(alert_id, tenant_id)`` from ingestion endpoints.
     Retries up to 3 times with exponential backoff if the pipeline fails.
@@ -116,3 +116,4 @@ async def _process_next_action() -> None:
     except Exception as exc:
         await d.complete_action(row["id"], "failed", {"error": str(exc)})
         logger.error("action_failed", action_id=str(row["id"]), error=str(exc))
+

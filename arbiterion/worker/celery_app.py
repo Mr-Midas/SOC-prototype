@@ -1,4 +1,4 @@
-"""Celery 5.x app configured for Redis broker + backend.
+﻿"""Celery 5.x app configured for Redis broker + backend.
 
 Exported as ``celery_app`` so both the worker binary and task definitions
 import from the same instance.  Configuration here applies to all tasks:
@@ -8,7 +8,7 @@ import from the same instance.  Configuration here applies to all tasks:
   limits gets killed instead of blocking the worker forever)
 - Beat schedule polls the action queue every 30s
 
-The app boots gracefully without Redis — ``.delay()`` calls will fail at
+The app boots gracefully without Redis â€” ``.delay()`` calls will fail at
 runtime rather than at import time, so the web server stays up.
 """
 
@@ -20,12 +20,12 @@ from celery import Celery
 
 BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Single Celery instance shared by all tasks in copilot_soc.worker.tasks
+# Single Celery instance shared by all tasks in arbiterion.worker.tasks
 celery_app = Celery(
-    "copilot_soc",
+    "arbiterion",
     broker=BROKER_URL,
     backend=BROKER_URL,
-    include=["copilot_soc.worker.tasks"],
+    include=["arbiterion.worker.tasks"],
 )
 
 celery_app.conf.update(
@@ -39,11 +39,12 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_soft_time_limit=180,
     task_time_limit=200,
-    # Beat schedule — poll the action queue every 30s
+    # Beat schedule â€” poll the action queue every 30s
     beat_schedule={
         "process-action-queue": {
-            "task": "copilot_soc.worker.tasks.process_action_queue",
+            "task": "arbiterion.worker.tasks.process_action_queue",
             "schedule": int(os.getenv("ACTION_POLL_INTERVAL", "30")),
         },
     },
 )
+

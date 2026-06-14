@@ -1,9 +1,9 @@
-# Copilot SOC — Architecture & Design Rationale
+﻿# Arbiterion â€” Architecture & Design Rationale
 
 ## Why This Architecture Exists
 
 This codebase refactors a monolithic FastAPI prototype ("Endpoint SOC Copilot") into a
-multi-tenant SaaS backend called **Copilot SOC**. The original prototype worked — it had
+multi-tenant SaaS backend called **Arbiterion**. The original prototype worked â€” it had
 a 3-agent AI pipeline, deterministic fallback, webhook ingestion, and a Jinja2 dashboard.
 But it was a single-file app with SQLite, hardcoded tenants, and no background worker.
 
@@ -33,42 +33,42 @@ The refactoring preserves every capability while adding:
 ## Module Layout
 
 ```
-copilot_soc/
-  main.py              — FastAPI app entry, CORS, route registration
-  config.py            — Env-based settings (singleton)
-  models.py            — Pydantic request/response schemas
+arbiterion/
+  main.py              â€” FastAPI app entry, CORS, route registration
+  config.py            â€” Env-based settings (singleton)
+  models.py            â€” Pydantic request/response schemas
   db/
-    schema.sql         — PostgreSQL DDL: 11 tables, enums, indexes
-    postgres.py        — asyncpg Database class with all CRUD
+    schema.sql         â€” PostgreSQL DDL: 11 tables, enums, indexes
+    postgres.py        â€” asyncpg Database class with all CRUD
   llm/
-    client.py          — LiteLLM acompletion wrapper + model map
+    client.py          â€” LiteLLM acompletion wrapper + model map
   pipeline/
-    state_machine.py   — PipelineState enum + Transition validation
-    fallback.py        — Deterministic fallback for 6 attack scenarios
-    orchestrator.py    — Manager→Triage→Containment orchestration
+    state_machine.py   â€” PipelineState enum + Transition validation
+    fallback.py        â€” Deterministic fallback for 6 attack scenarios
+    orchestrator.py    â€” Managerâ†’Triageâ†’Containment orchestration
   api/
-    deps.py            — Database singleton lifecycle
-    auth.py            — PBKDF2 + HMAC session auth
-    ingestion.py       — Webhook + endpoint-event ingestion
-    alerts.py          — Alert list, detail, governor approval
-    frontend.py        — Jinja2 dashboard pages + backward compat
-    settings.py        — Tenant LLM provider config
-    billing.py         — Stripe portal + webhook
+    deps.py            â€” Database singleton lifecycle
+    auth.py            â€” PBKDF2 + HMAC session auth
+    ingestion.py       â€” Webhook + endpoint-event ingestion
+    alerts.py          â€” Alert list, detail, governor approval
+    frontend.py        â€” Jinja2 dashboard pages + backward compat
+    settings.py        â€” Tenant LLM provider config
+    billing.py         â€” Stripe portal + webhook
   worker/
-    celery_app.py      — Celery 5.x app with Redis broker
-    tasks.py           — Async alert pipeline + action queue consumer
+    celery_app.py      â€” Celery 5.x app with Redis broker
+    tasks.py           â€” Async alert pipeline + action queue consumer
 ```
 
 ## Key Design Decisions
 
 ### Lightweight State Machine Over LangGraph
 
-The original prototype used a linear 3-agent chain: Manager→Triage→Containment.
+The original prototype used a linear 3-agent chain: Managerâ†’Triageâ†’Containment.
 LangGraph adds a heavy dependency (and frequent breaking changes) for what is
 fundamentally a sequential pipeline with retry logic.
 
 The state machine in `pipeline/state_machine.py` is ~70 lines:
-- A `PipelineState` enum with valid→next transitions
+- A `PipelineState` enum with validâ†’next transitions
 - A `StateMachine` class that validates each transition
 - A `run_with_retry` helper (3 attempts, exponential backoff)
 
@@ -85,7 +85,7 @@ behind a single `acompletion()` call with the model string `provider/model`:
 - `gemini/gemini-2.5-flash`
 - `ollama/llama3.1:8b`
 
-This means adding a new provider is just adding a model string — no new client code.
+This means adding a new provider is just adding a model string â€” no new client code.
 The `call_llm` function in `client.py` gracefully falls back to returning `""` if
 litellm is not installed (e.g., Python 3.14 which removed `cgi` module that litellm
 depends on), which triggers the deterministic fallback logic.
@@ -101,7 +101,7 @@ depends on), which triggers the deterministic fallback logic.
 The fallback logic in `fallback.py` covers every scenario the original prototype
 handled: phishing, ransomware, brute-force, data exfiltration, C2 beaconing,
 and generic detection. Each fallback function returns a valid `ManagerDecision`,
-`TriageFinding`, or `ContainmentPlan` — the same types the AI would return.
+`TriageFinding`, or `ContainmentPlan` â€” the same types the AI would return.
 
 The orchestrator tries AI first. If it fails or returns low confidence, it uses
 fallback as a default. The reasoning log records which path was taken.
@@ -110,15 +110,15 @@ fallback as a default. The reasoning log records which path was taken.
 
 Phase 1 uses `WHERE tenant_id = $1` on every query. This is explicit, auditable,
 and easy to debug. Phase 2 will add PostgreSQL Row-Level Security as a defense-in-depth
-layer — RLS means even if a query omits the tenant_id filter, the row is still hidden.
+layer â€” RLS means even if a query omits the tenant_id filter, the row is still hidden.
 
 The schema stores `tenant_id` in every table that holds tenant data. The Database
 class methods always accept `tenant_id` as a parameter. There is no global "current
-tenant" context — it's always explicit.
+tenant" context â€” it's always explicit.
 
 ### Celery + Redis for Async Processing
 
-Alerts can arrive via webhook at any time. The 3-agent pipeline takes 3–15 seconds
+Alerts can arrive via webhook at any time. The 3-agent pipeline takes 3â€“15 seconds
 (depending on AI response time). Blocking the HTTP request for that long would:
 - Exhaust uvicorn worker threads under load
 - Give a poor UX (the POST hangs for seconds)
@@ -136,10 +136,10 @@ The frontend polls `GET /api/alerts` to see results.
 
 The pipeline always produces a containment plan, but it is never executed without
 human approval. The flow:
-1. Pipeline completes → `governor_status = "pending"`
+1. Pipeline completes â†’ `governor_status = "pending"`
 2. Operator sees the plan in the dashboard
 3. Governor clicks Approve or Reject (`POST /api/alerts/{id}/governor`)
-4. If approved → action is enqueued in `action_queue`
+4. If approved â†’ action is enqueued in `action_queue`
 5. Celery's `process_action_queue` task picks it up and dispatches via webhook
 
 In `dry_run` mode (default), the action is recorded but not sent anywhere.
@@ -156,16 +156,16 @@ Phase 2 connector pattern (CrowdStrike, Splunk):
 ## Database Schema
 
 11 tables, all with `tenant_id`:
-- `tenants` — top-level org, stripe_customer_id, alert limits
-- `users` — auth credentials, role (analyst/governor/admin)
-- `alerts` — pipeline state, agent outputs, governor decision
-- `approvals` — audit trail of every approve/reject action
-- `action_queue` — pending/running/completed containment actions
-- `connectors` — per-tenant connector config (Phase 2)
-- `tenant_settings` — LLM provider, safe_mode, webhook_secret
-- `stripe_events` — idempotent Stripe webhook event log
-- `daily_usage` — per-day, per-tenant alert count (hourly buckets)
-- `alert_tags`, `alert_comments` — (reserved for Phase 2)
+- `tenants` â€” top-level org, stripe_customer_id, alert limits
+- `users` â€” auth credentials, role (analyst/governor/admin)
+- `alerts` â€” pipeline state, agent outputs, governor decision
+- `approvals` â€” audit trail of every approve/reject action
+- `action_queue` â€” pending/running/completed containment actions
+- `connectors` â€” per-tenant connector config (Phase 2)
+- `tenant_settings` â€” LLM provider, safe_mode, webhook_secret
+- `stripe_events` â€” idempotent Stripe webhook event log
+- `daily_usage` â€” per-day, per-tenant alert count (hourly buckets)
+- `alert_tags`, `alert_comments` â€” (reserved for Phase 2)
 
 ## Development vs Production
 
@@ -176,3 +176,4 @@ Phase 2 connector pattern (CrowdStrike, Splunk):
 | Worker | Celery in same compose | Celery workers on separate nodes |
 | Frontend | Jinja2 templates (legacy) | React app (Vite + shadcn/ui) |
 | LLM | Ollama local or free API keys | Byo API key per tenant |
+

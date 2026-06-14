@@ -1,7 +1,7 @@
-"""PBKDF2-HMAC-SHA256 authentication with HMAC-signed session tokens.
+﻿"""PBKDF2-HMAC-SHA256 authentication with HMAC-signed session tokens.
 
-Hash: salt (hex) + "$" + digest (hex) — stored in users.password_hash.
-Session token: ``{user_id}|{tenant_id}|{role}|{HMAC-SHA256}`` — stored in an
+Hash: salt (hex) + "$" + digest (hex) â€” stored in users.password_hash.
+Session token: ``{user_id}|{tenant_id}|{role}|{HMAC-SHA256}`` â€” stored in an
 httponly cookie named ``soc_session`` with 7-day expiry.
 
 Roles: analyst (read alerts), governor (approve/reject), admin (settings).
@@ -19,8 +19,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import ValidationError
 
-from copilot_soc.api.deps import get_db
-from copilot_soc.models import LoginRequest
+from arbiterion.api.deps import get_db
+from arbiterion.models import LoginRequest
 
 router = APIRouter(tags=["auth"])
 
@@ -123,7 +123,7 @@ async def login(request: Request):
     tenant_id = tenant["id"]
     email = payload.email
     if email == "admin":
-        email = "admin@copilot-soc.local"
+        email = "admin@arbiterion.local"
     user_record = await db.get_user_by_email(tenant_id, email)
     if not user_record or not _verify_password(payload.password, user_record["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -160,3 +160,4 @@ async def _resolve_tenant(db) -> Optional[UUID]:
         return row["id"] if row else None
     except Exception:
         return None
+

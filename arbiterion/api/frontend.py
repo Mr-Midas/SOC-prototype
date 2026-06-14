@@ -1,4 +1,4 @@
-"""Jinja2-based dashboard pages (login, dashboard, settings) + backward compat endpoints.
+﻿"""Jinja2-based dashboard pages (login, dashboard, settings) + backward compat endpoints.
 
 These routes serve the old monolithic frontend templates so users can immediately
 interact with the refactored backend without waiting for the React SPA (Phase 2).
@@ -7,7 +7,7 @@ The ``/login``, ``/`` (dashboard), and ``/settings`` pages are rendered server-s
 The ``/api/alerts/generate`` and ``/api/alerts/{id}/decision`` endpoints mimic the
 old monolithic API for backward compatibility.
 
-NOTE: Starlette 1.1.0+ requires TemplateResponse(request, name, context) — not (name, context).
+NOTE: Starlette 1.1.0+ requires TemplateResponse(request, name, context) â€” not (name, context).
 """
 
 from __future__ import annotations
@@ -20,13 +20,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from copilot_soc.api.auth import (
+from arbiterion.api.auth import (
     _issue_session_token,
     _verify_password,
     require_auth,
     verify_session_token,
 )
-from copilot_soc.api.deps import get_db
+from arbiterion.api.deps import get_db
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -93,7 +93,7 @@ async def login_form(request: Request):
         return RedirectResponse(url="/login?error=Username+and+password+required", status_code=303)
 
     if username == "admin":
-        username = "admin@copilot-soc.local"
+        username = "admin@arbiterion.local"
 
     tenant = await db.get_tenant_by_slug("default")
     if not tenant:
@@ -122,7 +122,7 @@ async def logout():
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """Main dashboard — requires authentication."""
+    """Main dashboard â€” requires authentication."""
     require_auth(request)
     return templates.TemplateResponse(
         request, "index.html",
@@ -172,7 +172,7 @@ async def generate_sample(request: Request):
         raw_alert=raw,
     )
 
-    from copilot_soc.pipeline.fallback import fallback_manager, fallback_triage, fallback_containment
+    from arbiterion.pipeline.fallback import fallback_manager, fallback_triage, fallback_containment
     manager = fallback_manager(raw)
     triage = fallback_triage(raw, manager)
     containment = fallback_containment(raw, manager, triage)
@@ -212,7 +212,7 @@ async def generate_sample(request: Request):
         classification=triage.classification,
     )
 
-    from copilot_soc.api.alerts import _transform_alert
+    from arbiterion.api.alerts import _transform_alert
     full_alert = await db.get_alert(UUID(str(alert["id"])), tenant_id)
     return _transform_alert(full_alert) if full_alert else {"id": str(alert["id"]), "rule_name": raw["rule_name"]}
 
@@ -250,6 +250,7 @@ async def alert_decision(alert_id: str, request: Request):
         note=note,
     )
 
-    from copilot_soc.api.alerts import _transform_alert
+    from arbiterion.api.alerts import _transform_alert
     updated_alert = await db.get_alert(UUID(alert_id), tenant_id)
     return _transform_alert(updated_alert) if updated_alert else {"status": governor_status, "alert_id": alert_id}
+

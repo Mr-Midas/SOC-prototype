@@ -1,4 +1,4 @@
-"""API route integration tests using FastAPI TestClient with a mock database layer.
+﻿"""API route integration tests using FastAPI TestClient with a mock database layer.
 
 Tests cover:
 - Health endpoint (no DB required)
@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from copilot_soc.main import app
+from arbiterion.main import app
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def _make_mock_db():
     })
     db.get_user_by_email = AsyncMock(return_value={
         "id": user_id, "tenant_id": tenant_id,
-        "email": "admin@copilot-soc.local",
+        "email": "admin@arbiterion.local",
         "password_hash": "f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6$abc123",
         "role": "admin",
     })
@@ -94,9 +94,9 @@ def mock_db():
 @pytest.fixture(autouse=True)
 def patch_get_db(mock_db):
     """Replace get_db() in every module that imports it with our mock."""
-    import copilot_soc.api.deps as deps
-    import copilot_soc.api.auth as auth_mod
-    import copilot_soc.api.ingestion as ingest_mod
+    import arbiterion.api.deps as deps
+    import arbiterion.api.auth as auth_mod
+    import arbiterion.api.ingestion as ingest_mod
 
     async def fake_get_db():
         return mock_db["db"]
@@ -116,7 +116,7 @@ def patch_get_db(mock_db):
     ingest_mod.get_db = original_ingest
 
 
-# ── Health ──────────────────────────────────────────────────────────────────
+# â”€â”€ Health â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestHealth:
     def test_health_returns_ok(self, client):
@@ -124,10 +124,10 @@ class TestHealth:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["service"] == "copilot-soc"
+        assert data["service"] == "arbiterion"
 
 
-# ── Auth Routes ─────────────────────────────────────────────────────────────
+# â”€â”€ Auth Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestAuth:
     def test_logout_returns_ok(self, client):
@@ -144,7 +144,7 @@ class TestAuth:
         assert resp.status_code == 401
 
 
-# ── Alert Routes ────────────────────────────────────────────────────────────
+# â”€â”€ Alert Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestAlerts:
     def test_list_alerts_without_auth(self, client):
@@ -161,14 +161,14 @@ class TestAlerts:
 
     def test_governor_with_analyst_session_denied(self, client, mock_db):
         """A session with role=analyst gets 403 on the governor endpoint."""
-        import copilot_soc.api.auth as auth_mod
+        import arbiterion.api.auth as auth_mod
         token = auth_mod._issue_session_token(str(uuid4()), str(mock_db["tenant_id"]), "analyst")
         client.cookies.set("soc_session", token)
         resp = client.post(f"/api/alerts/{uuid4()}/governor", json={"decision": "approve"})
         assert resp.status_code == 403
 
 
-# ── Settings Routes ─────────────────────────────────────────────────────────
+# â”€â”€ Settings Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestSettings:
     def test_get_settings_without_auth(self, client):
@@ -180,7 +180,7 @@ class TestSettings:
         assert resp.status_code == 401
 
 
-# ── Ingestion Routes ────────────────────────────────────────────────────────
+# â”€â”€ Ingestion Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestIngestion:
     def test_ingest_without_auth(self, client):
@@ -189,3 +189,4 @@ class TestIngestion:
             "summary": "This is a test alert for integration testing",
         })
         assert resp.status_code == 401
+

@@ -1,4 +1,4 @@
-"""Pydantic models for Copilot SOC — shared data contracts across all layers."""
+﻿"""Pydantic models for Arbiterion â€” shared data contracts across all layers."""
 
 from __future__ import annotations
 
@@ -119,3 +119,4 @@ class TenantSettingsUpdate(BaseModel):
     sample_events_enabled: Optional[bool] = None
     llm_api_key: Optional[str] = None
     webhook_secret: Optional[str] = None
+

@@ -1,4 +1,4 @@
-"""Alert routes — list, detail, and governor decision endpoints.
+﻿"""Alert routes â€” list, detail, and governor decision endpoints.
 
 The governor endpoint is the human-in-the-loop approval mechanism.
 Only users with role=governor or role=admin may approve/reject containment plans.
@@ -11,9 +11,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from copilot_soc.api.auth import require_auth, require_governor
-from copilot_soc.api.deps import get_db
-from copilot_soc.models import DecisionRequest
+from arbiterion.api.auth import require_auth, require_governor
+from arbiterion.api.deps import get_db
+from arbiterion.models import DecisionRequest
 
 router = APIRouter(tags=["alerts"])
 
@@ -104,7 +104,7 @@ async def list_alerts(
 
 @router.get("/api/alerts/{alert_id}")
 async def get_alert(alert_id: str, request: Request):
-    """Detail view for a single alert — includes pipeline output, reasoning log, governor decision."""
+    """Detail view for a single alert â€” includes pipeline output, reasoning log, governor decision."""
     user_identity = require_auth(request)
     db = await get_db()
     tenant_id = UUID(user_identity["tenant_id"])
@@ -155,3 +155,4 @@ async def governor_decision(alert_id: str, request: Request):
 
     updated_alert = await db.get_alert(UUID(alert_id), tenant_id)
     return _transform_alert(updated_alert) if updated_alert else {"status": governor_status, "alert_id": alert_id}
+

@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo ========================================
-echo  Endpoint SOC Copilot - First Time Setup
+echo  Arbiterion - First Time Setup
 echo ========================================
 echo.
 
@@ -35,6 +35,6 @@ if not exist .env (
 
 echo.
 echo Setup complete.
-echo Next: double-click "Start Endpoint SOC Copilot.bat"
+echo Next: double-click "Start Arbiterion.bat"
 echo.
 pause

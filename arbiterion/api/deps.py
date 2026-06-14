@@ -1,4 +1,4 @@
-"""Lazy singleton for the asyncpg Database pool.
+﻿"""Lazy singleton for the asyncpg Database pool.
 
 ``get_db()`` is called by every route handler and lazily creates the pool
 on first invocation.  This means the app can boot without PostgreSQL;
@@ -10,7 +10,7 @@ the user to run ``docker compose up -d``.
 
 from __future__ import annotations
 
-from copilot_soc.db.postgres import Database
+from arbiterion.db.postgres import Database
 
 _db: Database | None = None
 
@@ -38,3 +38,4 @@ async def close_db() -> None:
     if _db:
         await _db.close()
         _db = None
+

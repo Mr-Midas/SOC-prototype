@@ -1,11 +1,11 @@
-"""FastAPI application entry point.
+﻿"""FastAPI application entry point.
 
 Boots the web server, mounts routes from all API modules, configures CORS,
 serves static files, and provides a global exception handler.
 
-The database connection is NOT established here — it is lazily created by
+The database connection is NOT established here â€” it is lazily created by
 ``get_db()`` in deps.py when the first route handler needs it. This means
-``uvicorn copilot_soc.main:app`` succeeds instantly even without PostgreSQL.
+``uvicorn arbiterion.main:app`` succeeds instantly even without PostgreSQL.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from copilot_soc.api import alerts, auth, billing, frontend, ingestion, settings as settings_api
-from copilot_soc.api.deps import close_db, get_db
-from copilot_soc.config import settings
+from arbiterion.api import alerts, auth, billing, frontend, ingestion, settings as settings_api
+from arbiterion.api.deps import close_db, get_db
+from arbiterion.config import settings
 
 # Structured logging with ISO timestamps and console-friendly output
 import logging as _logging
@@ -48,9 +48,9 @@ structlog.configure(
 logger = structlog.get_logger()
 
 app = FastAPI(
-    title="Copilot SOC",
+    title="Arbiterion",
     version="2.0.0",
-    description="AI-powered SOC triage copilot — multi-tenant SaaS backend",
+    description="AI-powered SOC triage copilot â€” multi-tenant SaaS backend",
 )
 
 # CORS: allow the React dev server (Phase 2) and local development
@@ -81,14 +81,14 @@ else:
 
 @app.on_event("startup")
 async def startup():
-    logger.info("copilot_soc_starting", env=settings.environment)
+    logger.info("arbiterion_starting", env=settings.environment)
     await _bootstrap_database()
     _register_collector_callbacks()
 
 
 def _register_collector_callbacks():
     """Wire settings toggle to collector start/stop."""
-    from copilot_soc.api.settings import register_collector_callbacks
+    from arbiterion.api.settings import register_collector_callbacks
     register_collector_callbacks(
         start_cb=_start_collector,
         stop_cb=_stop_collector,
@@ -156,7 +156,7 @@ async def _bootstrap_database():
         # Seed admin user if not present
         exists = await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)",
-            "admin@copilot-soc.local",
+            "admin@arbiterion.local",
         )
         if not exists:
             tenant_id = uuid4()
@@ -172,14 +172,14 @@ async def _bootstrap_database():
                 tenant_id,
             )
             await conn.execute(
-                "INSERT INTO users (id, tenant_id, email, password_hash, role) VALUES ($1, $2, 'admin@copilot-soc.local', $3, 'admin')",
+                "INSERT INTO users (id, tenant_id, email, password_hash, role) VALUES ($1, $2, 'admin@arbiterion.local', $3, 'admin')",
                 admin_id, tenant_id, pw_hash,
             )
             await conn.execute(
                 "INSERT INTO tenant_settings (tenant_id, llm_provider, llm_model, use_ai_triage, safe_mode, webhook_secret) VALUES ($1, 'openai', 'gpt-4o-mini', false, true, $2)",
                 tenant_id, webhook_secret,
             )
-            logger.info("bootstrap_seeded_admin", email="admin@copilot-soc.local")
+            logger.info("bootstrap_seeded_admin", email="admin@arbiterion.local")
     except Exception as exc:
         logger.warning("bootstrap_failed", error=str(exc))
     finally:
@@ -209,8 +209,8 @@ async def _collector_loop():
         return
 
     try:
-        from copilot_soc.api.deps import get_db
-        from copilot_soc.api.auth import _resolve_tenant
+        from arbiterion.api.deps import get_db
+        from arbiterion.api.auth import _resolve_tenant
     except ImportError:
         logger.warning("collector_import_failed")
         return
@@ -229,7 +229,7 @@ async def _collector_loop():
                 if tenant_id:
                     for ev in events:
                         try:
-                            from copilot_soc.api.ingestion import _ingest_event
+                            from arbiterion.api.ingestion import _ingest_event
                             await _ingest_event(db, tenant_id, ev)
                         except Exception as e:
                             logger.warning("collector_event_failed", error=str(e)[:100])
@@ -249,7 +249,7 @@ async def _collector_loop():
 @app.get("/api/collector/status")
 async def collector_status(request: Request):
     """Return whether the collector background task is running."""
-    from copilot_soc.api.auth import require_auth
+    from arbiterion.api.auth import require_auth
     require_auth(request)
     running = _collector_task is not None and not _collector_task.done()
     return {"running": running, "platform": __import__("platform").system()}
@@ -258,7 +258,7 @@ async def collector_status(request: Request):
 @app.get("/api/health")
 async def health():
     """Lightweight health check. Returns immediately without DB access."""
-    return {"status": "ok", "service": "copilot-soc"}
+    return {"status": "ok", "service": "arbiterion"}
 
 
 @app.exception_handler(Exception)
@@ -270,3 +270,4 @@ async def global_exception_handler(request: Request, exc: Exception):
         pass
     detail = str(exc)[:200] if settings.environment == "development" else "Internal server error."
     return JSONResponse(status_code=500, content={"detail": detail})
+

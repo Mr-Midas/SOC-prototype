@@ -1,10 +1,10 @@
-"""Tests for the pipeline state machine — transition validation and retry logic."""
+﻿"""Tests for the pipeline state machine â€” transition validation and retry logic."""
 
 from __future__ import annotations
 
 import pytest
 
-from copilot_soc.pipeline.state_machine import (
+from arbiterion.pipeline.state_machine import (
     PipelineState,
     StateMachine,
     run_with_retry,
@@ -90,7 +90,7 @@ class TestStateMachine:
             sm._current = terminal
             assert sm.is_terminal()
             # no outgoing transitions
-            from copilot_soc.pipeline.state_machine import TRANSITIONS
+            from arbiterion.pipeline.state_machine import TRANSITIONS
             assert TRANSITIONS[terminal] == []
 
 
@@ -145,3 +145,4 @@ class TestRunWithRetry:
         elapsed = time.monotonic() - t0
         # At least the first delay (0.05s) should have elapsed
         assert elapsed >= 0.04
+
