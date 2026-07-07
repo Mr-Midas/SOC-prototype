@@ -32,6 +32,7 @@ from arbiterion.pipeline.fallback import (
     fallback_triage,
 )
 from arbiterion.pipeline.state_machine import PipelineState, StateMachine, run_with_retry
+from arbiterion.notifications import notify
 
 logger = structlog.get_logger()
 
@@ -95,6 +96,17 @@ async def process_alert(
     tenant_id: UUID,
     settings: dict[str, Any],
 ) -> dict[str, Any]:
+    # Notify on alert processing start
+    alert = await db.get_alert(alert_id, tenant_id)
+    if alert:
+        await notify("alert_created", {
+            "alert_id": str(alert_id),
+            "rule_name": alert.get("rule_name"),
+            "affected_host": alert.get("raw_alert", {}).get("affected_host"),
+            "severity": alert.get("severity"),
+            "summary": alert.get("summary"),
+        })
+
     state_machine = StateMachine()
     sm = state_machine  # shorthand
     reasoning_log: list[dict[str, Any]] = []

@@ -21,6 +21,8 @@ import structlog
 from arbiterion.db.postgres import Database
 from arbiterion.pipeline.orchestrator import process_alert
 from arbiterion.worker.celery_app import celery_app
+from arbiterion.edr import get_edr_client
+from arbiterion.notifications import notify
 
 logger = structlog.get_logger()
 
@@ -71,49 +73,88 @@ async def _run_pipeline_async(alert_id_str: str, tenant_id_str: str) -> dict:
     return result
 
 
-@celery_app.task
-def process_action_queue() -> None:
-    """Celery task: pick the next pending action and execute or dry-run it."""
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
+def execute_containment(
+    self,
+    alert_id_str: str,
+    tenant_id_str: str,
+) -> dict:
+    """Celery task: executes the containment action approved by the Governor."""
     import asyncio
-
+    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_process_next_action())
+        return loop.run_until_complete(_execute_containment_async(alert_id_str, tenant_id_str))
     finally:
         loop.close()
 
 
-async def _process_next_action() -> None:
-    """Dequeue one pending action, execute or dry-run, record the result."""
+async def _execute_containment_async(alert_id_str: str, tenant_id_str: str) -> dict:
+    """Async inner function to perform the EDR action."""
     d = await get_db()
-    row = await d.next_pending_action()
-    if not row:
-        return
+    alert_id = UUID(alert_id_str)
+    tenant_id = UUID(tenant_id_str)
+    
+    # 1. Fetch alert and settings
+    alert = await d.get_alert(alert_id, tenant_id)
+    if not alert:
+        return {"error": "alert not found"}
+    
+    settings = await d.get_settings(tenant_id)
+    edr_provider = settings.get("edr_provider", "defender")
+    client = get_edr_client(edr_provider)
+    
+    # 2. Parse containment plan
+    containment_output = _parse_jsonb(alert.get("containment_output"))
+    if not containment_output:
+        return {"error": "no containment plan found"}
+    
+    action_type = containment_output.get("action_type")
+    proposed_action = containment_output.get("proposed_action")
+    
+    # Map action_type to client method
+    # we use the raw_alert to get targets
+    raw_alert = _parse_jsonb(alert.get("raw_alert"))
+    host_id = raw_alert.get("affected_host", "localhost")
+    user_id = raw_alert.get("affected_user", "unknown")
+    ip = raw_alert.get("source_ip")
+    file_hash = raw_alert.get("indicators", [{}])[0].get("value") if raw_alert.get("indicators") else None
+
+    logger.info("executing_containment", alert_id=alert_id_str, action_type=action_type)
+    
     try:
-        payload = row["payload"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-
-        connector_mode = os.getenv("CONNECTOR_MODE", "dry_run").lower()
-        if connector_mode == "webhook":
-            webhook_url = os.getenv("CONTAINMENT_WEBHOOK_URL", "")
-            if webhook_url:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    resp = await client.post(webhook_url, json=payload)
-                    resp.raise_for_status()
-                result = {"mode": "webhook", "status_code": resp.status_code}
-                status = "executed"
-            else:
-                result = {"mode": "webhook", "error": "CONTAINMENT_WEBHOOK_URL not set"}
-                status = "failed"
+        if action_type == "Host Isolation":
+            result = await client.isolate_host(host_id, tenant_id, alert_id)
+        elif action_type == "Network Blocking" and ip:
+            result = await client.block_ip(ip, tenant_id, alert_id)
+        elif action_type == "Identity Containment" and user_id:
+            result = await client.disable_user(user_id, tenant_id, alert_id)
+        elif action_type == "Process Containment" and file_hash:
+            result = await client.quarantine_file(file_hash, host_id, tenant_id, alert_id)
         else:
-            result = {"mode": "dry_run", "message": "Action recorded but not sent.", "payload": payload}
-            status = "executed"
+            result = {"success": False, "message": f"Unsupported or missing targets for {action_type}"}
+        
+        # Update DB result
+        if result.get("success"):
+            await d.complete_action(
+                alert_id, # reusing alert_id as action_id for simplicity in this mapping
+                "executed", 
+                result
+            )
+        else:
+            await d.complete_action(alert_id, "failed", result)
+            
+        return result
+    except Exception as e:
+        logger.error("containment_execution_failed", error=str(e))
+        return {"success": False, "error": str(e)}
 
-        await d.complete_action(row["id"], status, result)
-        logger.info("action_completed", action_id=str(row["id"]), status=status)
-    except Exception as exc:
-        await d.complete_action(row["id"], "failed", {"error": str(exc)})
-        logger.error("action_failed", action_id=str(row["id"]), error=str(exc))
+def _parse_jsonb(value):
+    if isinstance(value, str):
+        import json
+        try: return json.loads(value)
+        except: return {}
+    return value if value else {}
+
 

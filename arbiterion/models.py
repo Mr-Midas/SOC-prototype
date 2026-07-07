@@ -1,4 +1,4 @@
-﻿"""Pydantic models for Arbiterion â€” shared data contracts across all layers."""
+﻿"""Pydantic models for Arbiterion — shared data contracts across all layers."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ PipelineState = Literal[
     "planning", "planning_failed",
     "completed", "failed",
 ]
+EdrProvider = Literal["wazuh", "defender", "sentinelone", "crowdstrike", "mock"]
+NotificationChannel = Literal["webhook", "email", "slack", "teams"]
 
 
 class ManagerDecision(BaseModel):
@@ -101,13 +103,20 @@ class LoginRequest(BaseModel):
 
 
 class TenantSettingsResponse(BaseModel):
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
+    llm_provider: str = "ollama"
+    llm_model: str = "llama3.1:8b"
     safe_mode: bool = True
     use_ai_triage: bool = True
     threat_intel_enabled: bool = False
     sample_events_enabled: bool = True
     webhook_secret: Optional[str] = None
+    edr_provider: EdrProvider = "mock"
+    edr_config: dict[str, Any] = Field(default_factory=dict)
+    notification_webhook_url: Optional[str] = None
+    notification_email_to: Optional[str] = None
+    notification_slack_webhook: Optional[str] = None
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1:8b"
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -119,4 +128,32 @@ class TenantSettingsUpdate(BaseModel):
     sample_events_enabled: Optional[bool] = None
     llm_api_key: Optional[str] = None
     webhook_secret: Optional[str] = None
+    edr_provider: Optional[EdrProvider] = None
+    edr_config: Optional[dict[str, Any]] = None
+    notification_webhook_url: Optional[str] = None
+    notification_email_to: Optional[str] = None
+    notification_slack_webhook: Optional[str] = None
+    ollama_base_url: Optional[str] = None
+    ollama_model: Optional[str] = None
 
+
+class EdrActionRequest(BaseModel):
+    action_type: str
+    target: dict[str, Any]
+    alert_id: UUID
+    tenant_id: UUID
+
+
+class EdrActionResponse(BaseModel):
+    success: bool
+    action_id: Optional[str] = None
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotificationRequest(BaseModel):
+    channel: NotificationChannel
+    recipient: str
+    subject: str
+    body: str
+    alert_id: Optional[UUID] = None

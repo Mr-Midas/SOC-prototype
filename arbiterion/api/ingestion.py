@@ -11,12 +11,12 @@ returns HTTP 202 â€” processing resumes when the worker comes back.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
+import os
 from typing import Optional
 from uuid import UUID, uuid4
 
+import redis
 import structlog
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
@@ -24,7 +24,10 @@ from pydantic import ValidationError
 from arbiterion.api.deps import get_db
 from arbiterion.api.auth import require_auth
 from arbiterion.models import IngestionRequest
-from arbiterion.worker.tasks import run_alert_pipeline
+
+# Redis client for ingestion streams
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["ingestion"])
@@ -100,9 +103,10 @@ async def ingest_alert(request: Request):
     await db.increment_alert_usage(tenant_id)
 
     try:
-        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+        # Push to Redis Stream for burst handling
+        redis_client.xadd("alerts:ingest", {"alert_id": str(alert["id"]), "tenant_id": str(tenant_id)})
     except Exception:
-        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
+        logger.warning("redis_stream_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {
         "status": "accepted",
@@ -178,9 +182,10 @@ async def ingest_endpoint_event_legacy(request: Request):
 
     await db.increment_alert_usage(tenant_id)
     try:
-        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+        # Push to Redis Stream for burst handling
+        redis_client.xadd("alerts:ingest", {"alert_id": str(alert["id"]), "tenant_id": str(tenant_id)})
     except Exception:
-        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
+        logger.warning("redis_stream_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {"status": "accepted", "id": str(alert["id"])}
 
@@ -222,9 +227,10 @@ async def _ingest_event(db, tenant_id: UUID, event: dict) -> dict:
 
     await db.increment_alert_usage(tenant_id)
     try:
-        run_alert_pipeline.delay(str(alert["id"]), str(tenant_id))
+        # Push to Redis Stream for burst handling
+        redis_client.xadd("alerts:ingest", {"alert_id": str(alert["id"]), "tenant_id": str(tenant_id)})
     except Exception:
-        logger.warning("celery_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
+        logger.warning("redis_stream_unavailable_alert_queued_locally", alert_id=str(alert["id"]))
 
     return {"status": "accepted", "id": str(alert["id"])}
 

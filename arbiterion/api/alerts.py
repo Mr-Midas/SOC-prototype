@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from arbiterion.api.auth import require_auth, require_governor
 from arbiterion.api.deps import get_db
 from arbiterion.models import DecisionRequest
+from arbiterion.notifications import notify
 
 router = APIRouter(tags=["alerts"])
 
@@ -152,6 +153,20 @@ async def governor_decision(alert_id: str, request: Request):
         user_id=UUID(user_identity["user_id"]),
         note=decision.operator_note,
     )
+
+    # Notify on governor decision
+    containment_plan = _parse_jsonb(alert.get("containment_output"))
+    await notify("governor_decision", {
+        "alert_id": alert_id,
+        "decision": governor_status,
+        "action": containment_plan.get("proposed_action", "Unknown"),
+        "governor": user_identity["user_id"],
+    })
+
+    # If approved, trigger the real containment execution
+    if governor_status == "approved":
+        from arbiterion.worker.tasks import execute_containment
+        execute_containment.delay(alert_id, str(tenant_id))
 
     updated_alert = await db.get_alert(UUID(alert_id), tenant_id)
     return _transform_alert(updated_alert) if updated_alert else {"status": governor_status, "alert_id": alert_id}

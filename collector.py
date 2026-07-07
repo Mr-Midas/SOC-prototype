@@ -23,6 +23,24 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+import collections
+
+import httpx
+from dotenv import load_dotenv
+
+# Global for rate limiting
+EVENT_SAMPLES = collections.deque(maxlen=1000) # track timestamps of forwarded events
+MAX_EVENTS_PER_MINUTE = 100
+
+def is_rate_limited() -> bool:
+    now = time.time()
+    # Clear old timestamps
+    while EVENT_SAMPLES and EVENT_SAMPLES[0] < now - 60:
+        EVENT_SAMPLES.popleft()
+    return len(EVENT_SAMPLES) >= MAX_EVENTS_PER_MINUTE
+
+def record_event() -> None:
+    EVENT_SAMPLES.append(time.time())
 
 import httpx
 from dotenv import load_dotenv
@@ -383,21 +401,29 @@ def poll_once(
 ) -> int:
     if platform.system().lower() != "windows":
         raise RuntimeError("collector.py only runs on Windows.")
+    
+    if is_rate_limited():
+        print("[COLLECTOR] Rate limit reached (100 events/min). Skipping poll.")
+        return 0
 
     pending = collect_pending_events(lookback_seconds)
     sent = 0
     with httpx.Client(timeout=20.0) as client:
+        # Batching: we can't easily batch endpoints if they aren't designed for it,
+        # but we can simulate batching by delaying a bit between requests if needed.
         for mapped in pending:
             if dry_run:
                 print(f"[DRY-RUN] Would post {mapped['event_type']}: {mapped['summary']}")
             else:
                 try:
                     post_event(client, endpoint, secret, mapped)
+                    record_event()
                 except Exception as exc:
                     print(f"[ERROR] Post failed for {mapped['event_type']}: {exc}")
                     continue
             sent += 1
     return sent
+
 
 
 def main() -> int:

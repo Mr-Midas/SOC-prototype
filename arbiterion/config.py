@@ -34,8 +34,10 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")
 
-    # Python 3.14 compat: litellm may be unavailable, handled gracefully at call sites
-    litellm_fallback: bool = os.getenv("LITELLM_FALLBACK", "true").lower() == "true"
+    # AI Defaults (Ollama / phi3)
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "phi3")
+    min_risk_for_ai: int = int(os.getenv("MIN_RISK_FOR_AI", "70"))
 
 
 settings = Settings()

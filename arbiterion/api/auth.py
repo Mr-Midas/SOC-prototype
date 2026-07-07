@@ -16,6 +16,11 @@ import secrets
 from typing import Optional
 from uuid import UUID
 
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+
+ph = PasswordHasher()
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import ValidationError
 
@@ -26,16 +31,20 @@ router = APIRouter(tags=["auth"])
 
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-this-session-secret")
 
-
 def _hash_password(password: str) -> str:
-    """PBKDF2-HMAC-SHA256 with 120K iterations and a random 16-byte salt."""
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000)
-    return f"{salt}${digest.hex()}"
+    """Argon2id hashing."""
+    return ph.hash(password)
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
-    """Constant-time compare to prevent timing attacks on login."""
+    """Verify Argon2id hash, fallback to PBKDF2 if old format."""
+    if password_hash.startswith("$argon2id$"):
+        try:
+            return ph.verify(password_hash, password)
+        except VerifyMismatchError:
+            return False
+    
+    # Fallback to PBKDF2 for legacy hashes
     try:
         salt, expected = password_hash.split("$", 1)
     except ValueError:
@@ -127,6 +136,14 @@ async def login(request: Request):
     user_record = await db.get_user_by_email(tenant_id, email)
     if not user_record or not _verify_password(payload.password, user_record["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    # Upgrade PBKDF2 hashes to Argon2id on successful login
+    if not user_record["password_hash"].startswith("$argon2id$"):
+        new_hash = _hash_password(payload.password)
+        await db.pool.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            new_hash, user_record["id"]
+        )
 
     token = _issue_session_token(str(user_record["id"]), str(tenant_id), user_record["role"])
     response = Response(status_code=200)

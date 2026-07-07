@@ -176,7 +176,7 @@ async def _bootstrap_database():
                 admin_id, tenant_id, pw_hash,
             )
             await conn.execute(
-                "INSERT INTO tenant_settings (tenant_id, llm_provider, llm_model, use_ai_triage, safe_mode, webhook_secret) VALUES ($1, 'openai', 'gpt-4o-mini', false, true, $2)",
+                "INSERT INTO tenant_settings (tenant_id, llm_provider, llm_model, use_ai_triage, safe_mode, webhook_secret) VALUES ($1, 'ollama', 'phi3', false, true, $2)",
                 tenant_id, webhook_secret,
             )
             logger.info("bootstrap_seeded_admin", email="admin@arbiterion.local")
@@ -257,8 +257,34 @@ async def collector_status(request: Request):
 
 @app.get("/api/health")
 async def health():
-    """Lightweight health check. Returns immediately without DB access."""
-    return {"status": "ok", "service": "arbiterion"}
+    """Detailed health check. Verifies DB, Redis, and Queue depth."""
+    health = {"status": "ok", "service": "arbiterion", "checks": {}}
+    
+    # 1. DB Check
+    try:
+        from arbiterion.api.deps import get_db
+        db = await get_db()
+        await db.pool.execute("SELECT 1")
+        health["checks"]["database"] = "ok"
+    except Exception as e:
+        health["checks"]["database"] = f"fail: {str(e)}"
+        health["status"] = "degraded"
+
+    # 2. Redis Check
+    try:
+        import redis
+        from arbiterion.config import settings
+        r = redis.from_url(settings.redis_url if hasattr(settings, 'redis_url') else "redis://localhost:6379/0")
+        r.ping()
+        # Queue depth
+        depth = r.xlen("alerts:ingest")
+        health["checks"]["redis"] = "ok"
+        health["checks"]["queue_depth"] = depth
+    except Exception as e:
+        health["checks"]["redis"] = f"fail: {str(e)}"
+        health["status"] = "degraded"
+
+    return health
 
 
 @app.exception_handler(Exception)

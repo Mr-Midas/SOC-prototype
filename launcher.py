@@ -265,8 +265,32 @@ def main() -> int:
     print("[2/3] Sysmon...")
     ensure_sysmon()
 
-    print("[3/3] Starting server...")
+    print("[3/3] Starting services...")
     kill_stale_port()
+
+    # 1. Celery Worker (for action queue + other tasks)
+    worker_proc = subprocess.Popen(
+        [python_bin, "-m", "celery", "-A", "arbiterion.worker.celery_app", "worker", "--loglevel=info"],
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(ROOT)},
+    )
+    print("  Started Celery Worker")
+
+    # 2. Stream Consumer (for ingestion pipeline)
+    consumer_proc = subprocess.Popen(
+        [python_bin, "arbiterion/worker/stream_consumer.py"],
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(ROOT)},
+    )
+    print("  Started Stream Consumer")
+
+    # 3. FastAPI Server
+    server_proc = subprocess.Popen(
+        [python_bin, "-m", "uvicorn", "arbiterion.main:app", "--host", "127.0.0.1", "--port", "8000"],
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(ROOT)},
+    )
+    print("  Started FastAPI Server")
 
     print("[4/3] Done!")
     print()
@@ -277,19 +301,18 @@ def main() -> int:
     print("  Press Ctrl+C to stop.")
     print()
 
-    process = subprocess.Popen(
-        [python_bin, "-m", "uvicorn", "arbiterion.main:app", "--host", "127.0.0.1", "--port", "8000"],
-        cwd=str(ROOT),
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-    )
     time.sleep(3)
     webbrowser.open("http://127.0.0.1:8000/login")
 
     try:
-        return process.wait()
+        # Wait for server_proc, terminate others on exit
+        return server_proc.wait()
     except KeyboardInterrupt:
-        process.terminate()
+        worker_proc.terminate()
+        consumer_proc.terminate()
+        server_proc.terminate()
         return 0
+
 
 
 if __name__ == "__main__":

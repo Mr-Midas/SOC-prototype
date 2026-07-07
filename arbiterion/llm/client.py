@@ -35,6 +35,7 @@ def _build_litellm_kwargs(
     user_payload: dict[str, Any],
     api_key: Optional[str] = None,
 ) -> dict[str, Any]:
+    # For Ollama, we need to set the base_url
     kwargs: dict[str, Any] = {
         "model": model_key,
         "messages": [
@@ -44,6 +45,10 @@ def _build_litellm_kwargs(
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
+    if "ollama/" in model_key:
+        from arbiterion.config import settings
+        kwargs["api_base"] = settings.ollama_base_url
+    
     if api_key:
         kwargs["api_key"] = api_key
     return kwargs
