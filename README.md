@@ -8,6 +8,10 @@ Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager â†�
 
 Double-click **`Start Arbiterion.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
 
+> **Important**: The manual script below requires **PowerShell** (Run as Administrator).
+> Open PowerShell by right-clicking the Start button → **Windows PowerShell (Admin)** or **Terminal (Admin)**.
+> Do **not** paste into Command Prompt (cmd.exe) — it will not work.
+
 Or manually — this script auto-detects and installs missing dependencies:
 
 ```powershell
