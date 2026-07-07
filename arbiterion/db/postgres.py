@@ -316,14 +316,22 @@ class Database:
                             co = _json.loads(co)
                         except Exception:
                             co = {}
-                    await self.enqueue_action(tenant_id, alert_id, co)
+                    await self.enqueue_action(alert_id, tenant_id, co)
 
     # â”€â”€ Action Queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+    async def set_governor_pending(self, alert_id: UUID, tenant_id: UUID) -> None:
+        """Set governor_decision to pending_approval after pipeline completes."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE alerts SET governor_decision = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3",
+                json.dumps({"status": "pending_approval"}), alert_id, tenant_id,
+            )
+
     async def enqueue_action(
         self,
-        tenant_id: UUID,
         alert_id: UUID,
+        tenant_id: UUID,
         containment_output: dict[str, Any],
     ) -> None:
         """Add an approved containment action to the action_queue for execution."""

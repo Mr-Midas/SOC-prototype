@@ -11,6 +11,8 @@ returns HTTP 202 â€” processing resumes when the worker comes back.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 from typing import Optional

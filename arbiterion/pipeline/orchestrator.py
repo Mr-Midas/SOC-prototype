@@ -99,10 +99,16 @@ async def process_alert(
     # Notify on alert processing start
     alert = await db.get_alert(alert_id, tenant_id)
     if alert:
+        raw_alert_val = alert.get("raw_alert") or {}
+        if isinstance(raw_alert_val, str):
+            try:
+                raw_alert_val = json.loads(raw_alert_val)
+            except (json.JSONDecodeError, TypeError):
+                raw_alert_val = {}
         await notify("alert_created", {
             "alert_id": str(alert_id),
             "rule_name": alert.get("rule_name"),
-            "affected_host": alert.get("raw_alert", {}).get("affected_host"),
+            "affected_host": raw_alert_val.get("affected_host") if isinstance(raw_alert_val, dict) else None,
             "severity": alert.get("severity"),
             "summary": alert.get("summary"),
         })
@@ -246,6 +252,7 @@ async def process_alert(
         containment_output=containment.model_dump(),
         reasoning_log=reasoning_log,
     )
+    await db.set_governor_pending(alert_id, tenant_id)
 
     logger.info(
         "pipeline_completed",
