@@ -4,29 +4,42 @@ AI-powered SOC triage platform — multi-tenant SaaS backend (Phase 1).
 
 Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager â†’ Triage â†’ Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
 
-## Quick Start (Windows â€” One-Click)
+## Quick Start (Windows — One-Click)
 
 Double-click **`Start Arbiterion.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
 
-Or manually:
+Or manually — this script auto-detects Python and installs it if missing:
 
 ```powershell
-# 1. Create virtual environment
+# 1. Auto-detect Python; download & install if not found
+$python = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+if (-not $python) {
+    Write-Host "Python not found. Downloading Python 3.11..."
+    $url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+    $installer = "$env:TEMP\python-installer.exe"
+    Invoke-WebRequest -Uri $url -OutFile $installer
+    Start-Process -FilePath $installer -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -Wait
+    # Refresh PATH
+    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+}
+python --version
+
+# 2. Create virtual environment
 python -m venv .venv
 
-# 2. Activate it
+# 3. Activate it
 .venv\Scripts\activate
 
-# 3. Install dependencies
+# 4. Install dependencies
 pip install -r requirements.txt
 
-# 4. Set up environment (copy defaults)
-copy .env.example .env
+# 5. Set up environment (copy defaults)
+copy .env.example .env >nul
 
-# 5. Start the app (no Postgres required for dev â€” boots instantly)
+# 6. Start the app (no Postgres required for dev — boots instantly)
 uvicorn arbiterion.main:app --reload
 
-# 6. Open in browser
+# 7. Open in browser
 start http://127.0.0.1:8000
 ```
 
