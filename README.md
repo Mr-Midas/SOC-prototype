@@ -8,7 +8,7 @@ Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager â†�
 
 Double-click **`Start Arbiterion.bat`** (runs `Install.bat` first if needed, then launches the app and opens your browser).
 
-Or manually — this script auto-detects Python and installs it if missing:
+Or manually — this script auto-detects and installs missing dependencies:
 
 ```powershell
 # 1. Auto-detect Python; download & install if not found
@@ -19,27 +19,67 @@ if (-not $python) {
     $installer = "$env:TEMP\python-installer.exe"
     Invoke-WebRequest -Uri $url -OutFile $installer
     Start-Process -FilePath $installer -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -Wait
-    # Refresh PATH
     $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
 }
 python --version
 
-# 2. Create virtual environment
+# 2. Auto-detect Git; download & install if not found
+$git = (Get-Command git -ErrorAction SilentlyContinue)?.Source
+if (-not $git) {
+    Write-Host "Git not found. Downloading Git..."
+    $url = "https://github.com/git-for-windows/git/releases/download/v2.45.1.windows.1/Git-2.45.1-64-bit.exe"
+    $installer = "$env:TEMP\git-installer.exe"
+    Invoke-WebRequest -Uri $url -OutFile $installer
+    Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -Wait
+    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+}
+git --version
+
+# 3. Auto-detect Ollama; download & install if not found (for local LLM)
+$ollama = (Get-Command ollama -ErrorAction SilentlyContinue)?.Source
+if (-not $ollama) {
+    Write-Host "Ollama not found. Downloading Ollama..."
+    $url = "https://github.com/ollama/ollama/releases/latest/download/OllamaSetup.exe"
+    $installer = "$env:TEMP\ollama-installer.exe"
+    Invoke-WebRequest -Uri $url -OutFile $installer
+    Start-Process -FilePath $installer -ArgumentList '/S' -Wait
+    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+}
+ollama --version
+# Pull default model (phi3) if not present
+if (-not (ollama list | Select-String "phi3")) {
+    Write-Host "Pulling phi3 model..."
+    ollama pull phi3
+}
+
+# 4. Auto-detect Node.js; download & install if not found (for Phase 2 React frontend)
+$node = (Get-Command node -ErrorAction SilentlyContinue)?.Source
+if (-not $node) {
+    Write-Host "Node.js not found. Downloading Node.js 20 LTS..."
+    $url = "https://nodejs.org/dist/v20.15.0/node-v20.15.0-x64.msi"
+    $installer = "$env:TEMP\node-installer.msi"
+    Invoke-WebRequest -Uri $url -OutFile $installer
+    Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
+    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+}
+node --version
+
+# 5. Create virtual environment
 python -m venv .venv
 
-# 3. Activate it
+# 6. Activate it
 .venv\Scripts\activate
 
-# 4. Install dependencies
+# 7. Install dependencies
 pip install -r requirements.txt
 
-# 5. Set up environment (copy defaults)
+# 8. Set up environment (copy defaults)
 copy .env.example .env >nul
 
-# 6. Start the app (no Postgres required for dev — boots instantly)
+# 9. Start the app (no Postgres required for dev — boots instantly)
 uvicorn arbiterion.main:app --reload
 
-# 7. Open in browser
+# 10. Open in browser
 start http://127.0.0.1:8000
 ```
 
@@ -57,9 +97,23 @@ uvicorn arbiterion.main:app --reload
 
 ## Full Stack with Docker
 
-Requires Docker Desktop with WSL2 backend.
+Requires Docker Desktop with WSL2 backend. The script below auto-installs Docker Desktop if missing:
 
 ```powershell
+# Auto-detect Docker Desktop; download & install if not found
+$docker = (Get-Command docker -ErrorAction SilentlyContinue)?.Source
+if (-not $docker) {
+    Write-Host "Docker Desktop not found. Downloading..."
+    $url = "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe"
+    $installer = "$env:TEMP\docker-installer.exe"
+    Invoke-WebRequest -Uri $url -OutFile $installer
+    Start-Process -FilePath $installer -ArgumentList 'install --quiet' -Wait
+    # Wait for Docker daemon to start
+    for ($i=0; $i -lt 120; $i++) {
+        if (docker info 2>$null) { break }
+        Start-Sleep 1
+    }
+}
 docker compose up -d
 python scripts/seed.py     # Bootstrap first tenant + admin user
 ```
