@@ -15,40 +15,49 @@ Double-click **`Start Arbiterion.bat`** (runs `Install.bat` first if needed, the
 Or manually — this script auto-detects and installs missing dependencies:
 
 ```powershell
-# 1. Auto-detect Python; download & install if not found
-$python = (Get-Command python -ErrorAction SilentlyContinue)?.Source
-if (-not $python) {
-    Write-Host "Python not found. Downloading Python 3.11..."
-    $url = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
-    $installer = "$env:TEMP\python-installer.exe"
-    Invoke-WebRequest -Uri $url -OutFile $installer
-    Start-Process -FilePath $installer -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -Wait
-    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+# Helper: refresh PATH from registry and retry until a command is found
+function Wait-Command($Name, $Label) {
+    $retries = 60
+    for ($i = 0; $i -lt $retries; $i++) {
+        $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+        Write-Host "`r  Waiting for $Label... ($($i+1)/$retries)" -NoNewline
+        Start-Sleep 2
+        # Refresh PATH from registry so newly installed tools are found
+        $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    }
+    Write-Host "`nERROR: $Label did not install. Aborting."
+    exit 1
 }
+
+# 1. Python
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) {
+    Write-Host "Python not found. Downloading Python 3.11..."
+    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile "$env:TEMP\python-installer.exe"
+    Start-Process -FilePath "$env:TEMP\python-installer.exe" -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -Wait
+}
+$python_path = Wait-Command python "Python 3.11"
 python --version
 
-# 2. Auto-detect Git; download & install if not found
-$git = (Get-Command git -ErrorAction SilentlyContinue)?.Source
-if (-not $git) {
+# 2. Git
+$g = Get-Command git -ErrorAction SilentlyContinue
+if (-not $g) {
     Write-Host "Git not found. Downloading Git..."
-    $url = "https://github.com/git-for-windows/git/releases/download/v2.45.1.windows.1/Git-2.45.1-64-bit.exe"
-    $installer = "$env:TEMP\git-installer.exe"
-    Invoke-WebRequest -Uri $url -OutFile $installer
-    Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -Wait
-    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.45.1.windows.1/Git-2.45.1-64-bit.exe" -OutFile "$env:TEMP\git-installer.exe"
+    Start-Process -FilePath "$env:TEMP\git-installer.exe" -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -Wait
 }
+$git_path = Wait-Command git "Git"
 git --version
 
-# 3. Auto-detect Ollama; download & install if not found (for local LLM)
-$ollama = (Get-Command ollama -ErrorAction SilentlyContinue)?.Source
-if (-not $ollama) {
+# 3. Ollama
+$o = Get-Command ollama -ErrorAction SilentlyContinue
+if (-not $o) {
     Write-Host "Ollama not found. Downloading Ollama..."
-    $url = "https://github.com/ollama/ollama/releases/latest/download/OllamaSetup.exe"
-    $installer = "$env:TEMP\ollama-installer.exe"
-    Invoke-WebRequest -Uri $url -OutFile $installer
-    Start-Process -FilePath $installer -ArgumentList '/S' -Wait
-    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    Invoke-WebRequest -Uri "https://github.com/ollama/ollama/releases/latest/download/OllamaSetup.exe" -OutFile "$env:TEMP\ollama-installer.exe"
+    Start-Process -FilePath "$env:TEMP\ollama-installer.exe" -ArgumentList '/S' -Wait
 }
+$ollama_path = Wait-Command ollama "Ollama"
 ollama --version
 # Pull default model (phi3) if not present
 if (-not (ollama list | Select-String "phi3")) {
@@ -56,16 +65,15 @@ if (-not (ollama list | Select-String "phi3")) {
     ollama pull phi3
 }
 
-# 4. Auto-detect Node.js; download & install if not found (for Phase 2 React frontend)
-$node = (Get-Command node -ErrorAction SilentlyContinue)?.Source
-if (-not $node) {
+# 4. Node.js
+$n = Get-Command node -ErrorAction SilentlyContinue
+if (-not $n) {
     Write-Host "Node.js not found. Downloading Node.js 20 LTS..."
-    $url = "https://nodejs.org/dist/v20.15.0/node-v20.15.0-x64.msi"
-    $installer = "$env:TEMP\node-installer.msi"
-    Invoke-WebRequest -Uri $url -OutFile $installer
-    Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
-    $env:PATH = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+    $node_url = "https://nodejs.org/dist/v20.15.0/node-v20.15.0-x64.msi"
+    Invoke-WebRequest -Uri $node_url -OutFile "$env:TEMP\node-installer.msi"
+    Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\node-installer.msi`" /quiet /norestart" -Wait
 }
+$node_path = Wait-Command node "Node.js"
 node --version
 
 # 5. Create virtual environment
