@@ -11,3 +11,9 @@ server.log
 server_out.log
 *.log
 server_pid.txt
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
