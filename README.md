@@ -2,7 +2,7 @@
 
 AI-powered SOC triage platform — multi-tenant SaaS backend (Phase 1).
 
-Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager â†’ Triage â†’ Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
+Ingests security alerts via webhook, runs a 3-agent AI pipeline (Manager & Triage & Containment), and keeps final containment decisions in human hands via a Governor approval workflow.
 
 ## Quick Start (Windows — One-Click)
 
