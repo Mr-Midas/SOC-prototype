@@ -20,6 +20,7 @@ router = APIRouter(tags=["settings"])
 _collector_start_cb = None
 _collector_stop_cb = None
 _collector_is_running_cb = None
+_settings_sync_cb = None
 
 
 def register_collector_callbacks(start_cb, stop_cb, is_running_cb):
@@ -28,6 +29,12 @@ def register_collector_callbacks(start_cb, stop_cb, is_running_cb):
     _collector_start_cb = start_cb
     _collector_stop_cb = stop_cb
     _collector_is_running_cb = is_running_cb
+
+
+def register_settings_sync_cb(sync_cb):
+    """Called once at startup by main.py to wire settings propagation."""
+    global _settings_sync_cb
+    _settings_sync_cb = sync_cb
 
 
 @router.get("/api/settings")
@@ -78,6 +85,9 @@ async def update_settings(request: Request):
             _collector_start_cb()
         elif not changes["monitor_windows_events"] and _collector_stop_cb:
             _collector_stop_cb()
+
+    if _settings_sync_cb and changes:
+        _settings_sync_cb(changes)
 
     settings = await db.get_settings(tenant_id)
     sensitive_keys = {"llm_api_key", "webhook_secret"}

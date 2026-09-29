@@ -84,6 +84,7 @@ async def startup():
     logger.info("arbiterion_starting", env=settings.environment)
     await _bootstrap_database()
     _register_collector_callbacks()
+    _register_settings_sync()
 
 
 def _register_collector_callbacks():
@@ -94,6 +95,25 @@ def _register_collector_callbacks():
         stop_cb=_stop_collector,
         is_running_cb=lambda: _collector_task is not None and not _collector_task.done(),
     )
+
+
+def _register_settings_sync():
+    """Wire settings toggles to the running soc_service."""
+    from arbiterion.api.settings import register_settings_sync_cb
+
+    def sync(changes):
+        import app as app_module
+        svc = app_module.soc_service
+        if "use_ai_triage" in changes:
+            svc.use_ai_triage = changes["use_ai_triage"]
+        if "safe_mode" in changes:
+            svc.connector_mode = "dry_run" if changes["safe_mode"] else "webhook"
+        if "threat_intel_enabled" in changes:
+            svc.threat_intel_enabled = changes["threat_intel_enabled"]
+        if "sample_events_enabled" in changes:
+            svc.enable_sample_generation = changes["sample_events_enabled"]
+
+    register_settings_sync_cb(sync)
 
 
 def _start_collector():

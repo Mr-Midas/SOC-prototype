@@ -239,7 +239,7 @@
     </div>
 
     <script id="soc-bootstrap-data" type="application/json">
-        {{ bootstrap_json | tojson }}
+        {{ bootstrap_json | safe }}
     </script>
     <script>
         try {
