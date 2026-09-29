@@ -54,7 +54,7 @@ STATE_PATH = BASE_DIR / ".collector_state.json"
 SYSMON_LOG = "Microsoft-Windows-Sysmon/Operational"
 SECURITY_LOG = "Security"
 
-SYSMON_EVENT_IDS = {1, 3, 10, 11, 22, 23, 25}
+SYSMON_EVENT_IDS = {1, 3, 10, 11, 13, 22, 23, 25}
 SECURITY_EVENT_IDS = {4624, 4625, 4688, 4720, 4732}
 
 # Local pre-filter: only forward events that match at least one rule.
@@ -88,6 +88,33 @@ NOISY_PROCESS_NAMES = {
     "searchhost.exe",
     "runtimebroker.exe",
 }
+
+# File path prefixes that are benign OS/application noise and should be
+# suppressed for Sysmon event ID 11 (FileCreate).
+NOISY_FILE_PATHS = (
+    "Programs\\Microsoft VS Code\\",
+    "Google Chrome\\",
+    "discord\\",
+    "Packages\\",
+    "__PSScriptPolicyTest_",
+    "hermes\\",
+    "AppData\\Local\\Temp\\",
+    "AppData\\Local\\Microsoft\\Windows\\PowerShell\\",
+    "Windows\\Temp\\",
+    "Windows\\Installer\\",
+    "Windows\\system32\\Drivers\\",
+    "Windows\\SysWOW64\\Drivers\\",
+    "Windows\\AppPatch\\",
+    "Windows\\Tasks\\",
+    "Windows\\system32\\GroupPolicy\\",
+    "Windows\\system32\\Wbem\\",
+    "Windows\\SysWOW64\\Wbem\\",
+    "Windows\\system32\\WindowsPowerShell\\",
+    "Windows\\SysWOW64\\WindowsPowerShell\\",
+    "ProgramData\\",
+    "Users\\Default\\",
+    "Documents\\",
+)
 
 
 def utc_now_iso() -> str:
@@ -229,7 +256,14 @@ def should_forward(log_name: str, event: dict[str, Any]) -> bool:
                 return False
             return True
 
-        if event_id in {10, 11, 23, 25}:
+        if event_id in {10, 13, 23, 25}:
+            return True
+
+        if event_id == 11:
+            target = data.get("TargetFilename") or ""
+            target_lower = target.lower()
+            if any(prefix.lower() in target_lower for prefix in NOISY_FILE_PATHS):
+                return False
             return True
 
         if event_id == 22:
@@ -289,6 +323,15 @@ def map_event(log_name: str, event: dict[str, Any]) -> Optional[dict[str, Any]]:
         event_type = "dns_query"
         summary = f"DNS query on {host_id()} for {data.get('QueryName') or 'unknown domain'}."
         severity_hint = "Low"
+    elif log_name == SYSMON_LOG and event_id == 13:
+        event_type = "registry_value_set"
+        summary = (
+            f"Registry value set on {host_id()} at "
+            f"{data.get('TargetObject') or 'unknown key'}."
+        )
+        severity_hint = "High" if any(
+            term in blob for term in ("currentversion\\run", "winlogon", "service", "debugger", "userinit", "exclusion")
+        ) else "Medium"
     elif log_name == SYSMON_LOG and event_id in {23, 25}:
         event_type = "file_tampering"
         summary = f"File delete/rename activity detected on {host_id()}."
@@ -306,6 +349,7 @@ def map_event(log_name: str, event: dict[str, Any]) -> Optional[dict[str, Any]]:
             data.get("DestinationIp"),
             data.get("QueryName"),
             data.get("TargetFilename"),
+            data.get("TargetObject"),
             data.get("Hashes"),
             username,
         ]
@@ -340,6 +384,12 @@ def map_event(log_name: str, event: dict[str, Any]) -> Optional[dict[str, Any]]:
             "raw_data": data,
         },
     }
+
+
+def login(client: httpx.Client, login_url: str, username: str, password: str) -> None:
+    """Authenticate via /api/login and persist the soc_session cookie on the client."""
+    response = client.post(login_url, json={"email": username, "password": password}, timeout=20.0)
+    response.raise_for_status()
 
 
 def post_event(client: httpx.Client, endpoint: str, secret: str, payload: dict[str, Any]) -> None:
@@ -398,6 +448,9 @@ def poll_once(
     secret: str,
     lookback_seconds: int,
     dry_run: bool,
+    login_url: str = "",
+    username: str = "",
+    password: str = "",
 ) -> int:
     if platform.system().lower() != "windows":
         raise RuntimeError("collector.py only runs on Windows.")
@@ -409,6 +462,12 @@ def poll_once(
     pending = collect_pending_events(lookback_seconds)
     sent = 0
     with httpx.Client(timeout=20.0) as client:
+        if username and password:
+            try:
+                login(client, login_url, username, password)
+            except Exception as exc:
+                print(f"[ERROR] Login to {login_url} failed: {exc}")
+                return 0
         # Batching: we can't easily batch endpoints if they aren't designed for it,
         # but we can simulate batching by delaying a bit between requests if needed.
         for mapped in pending:
@@ -437,6 +496,21 @@ def main() -> int:
         "--secret",
         default=os.getenv("WEBHOOK_SHARED_SECRET", os.getenv("COLLECTOR_SHARED_SECRET", "")),
         help="Shared secret for X-Signature HMAC (must match app WEBHOOK_SHARED_SECRET).",
+    )
+    parser.add_argument(
+        "--login-url",
+        default=os.getenv("COLLECTOR_LOGIN_URL", "http://127.0.0.1:8000/api/login"),
+        help="Arbiterion /api/login URL used to obtain a session cookie.",
+    )
+    parser.add_argument(
+        "--username",
+        default=os.getenv("COLLECTOR_USERNAME", ""),
+        help="Arbiterion username (e.g. admin@arbiterion.local) for session auth.",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.getenv("COLLECTOR_PASSWORD", ""),
+        help="Password for the collector session user.",
     )
     parser.add_argument(
         "--interval",
@@ -473,6 +547,9 @@ def main() -> int:
                 secret=args.secret,
                 lookback_seconds=args.lookback,
                 dry_run=args.dry_run,
+                login_url=args.login_url,
+                username=args.username,
+                password=args.password,
             )
             print(f"[COLLECTOR] forwarded={count} at {utc_now_iso()}")
         except Exception as exc:

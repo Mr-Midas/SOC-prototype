@@ -9,6 +9,10 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Override host-oriented .env URLs with container service names.
+      DATABASE_URL: postgresql://arbiterion:arbiterion@postgres:5432/arbiterion
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -22,6 +26,9 @@ services:
   worker:
     build: .
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://arbiterion:arbiterion@postgres:5432/arbiterion
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -30,6 +37,22 @@ services:
     volumes:
       - .:/app
     command: celery -A arbiterion.worker.celery_app worker --loglevel=info --concurrency=4
+
+  # Stream consumer â€” reads alerts:ingest and runs the pipeline for each alert
+  consumer:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://arbiterion:arbiterion@postgres:5432/arbiterion
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+    command: python -m arbiterion.worker.stream_consumer
 
   # PostgreSQL 16 â€” schema auto-loaded via docker-entrypoint-initdb.d
   postgres:
