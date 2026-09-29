@@ -204,6 +204,7 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS alerts (
                     id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
+                    created_at_ts REAL,
                     source TEXT NOT NULL,
                     rule_name TEXT NOT NULL,
                     severity TEXT NOT NULL,
@@ -231,6 +232,14 @@ class DatabaseManager:
                 """
             )
             self.conn.commit()
+            self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(alerts)")}
+        if "created_at_ts" not in cols:
+            self.conn.execute("ALTER TABLE alerts ADD COLUMN created_at_ts REAL")
+            self.conn.execute("UPDATE alerts SET created_at_ts = CAST(strftime('%s', created_at) AS REAL)")
+            self.conn.commit()
 
     def upsert_user(self, username: str, password_hash: str, role: str) -> None:
         with self.lock:
@@ -257,12 +266,13 @@ class DatabaseManager:
         with self.lock:
             self.conn.execute(
                 """
-                INSERT OR REPLACE INTO alerts (id, created_at, source, rule_name, severity, governor_status, data_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO alerts (id, created_at, created_at_ts, source, rule_name, severity, governor_status, data_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     alert.id,
                     alert.created_at.isoformat(),
+                    alert.created_at.timestamp(),
                     alert.source,
                     alert.rule_name,
                     alert.manager.severity,
@@ -271,11 +281,12 @@ class DatabaseManager:
                 ),
             )
             self.conn.commit()
+            print(f"[DB] Saved alert {alert.id} at ts={alert.created_at.timestamp()}")
 
     def load_alerts(self, limit: int) -> list[AlertRecord]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT data_json FROM alerts ORDER BY created_at DESC LIMIT ?",
+                "SELECT data_json FROM alerts ORDER BY created_at_ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [AlertRecord.model_validate_json(row["data_json"]) for row in rows]
@@ -637,6 +648,7 @@ class AgenticSOCService:
 
     async def list_alerts(self) -> list[AlertRecord]:
         async with self.lock:
+            print(f"[API] list_alerts returning {len(self.alerts)} alerts")
             return [alert.model_copy(deep=True) for alert in self.alerts]
 
     async def get_alert(self, alert_id: str) -> AlertRecord:
