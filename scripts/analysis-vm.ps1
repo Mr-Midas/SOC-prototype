@@ -45,7 +45,11 @@ param(
 
     [string]$SamplePath,
 
-    [int]$Seconds = 90
+    [int]$Seconds = 90,
+
+    [string]$DllExport = "#1",
+
+    [string]$SampleArgs = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -61,6 +65,12 @@ $WorkDir     = Join-Path $env:TEMP "arbiterion-vm-analysis"
 $CredFile    = Join-Path $WorkDir "credentials.json"
 $StateFile   = Join-Path $WorkDir "state.json"
 $RepoRoot    = Split-Path -Parent $PSScriptRoot
+$SinkholePy  = Join-Path $PSScriptRoot "sinkhole.py"
+$ManifestPy  = Join-Path $PSScriptRoot "lab_manifest.py"
+$DetonatePs1 = Join-Path $PSScriptRoot "detonate.ps1"
+$GuestDesktop = "C:\Users\$AdminUser\Desktop"
+$GuestToolDir = "C:\ProgramData\Arbiterion\collector"
+$Dumpcap     = "C:\Program Files\Wireshark\dumpcap.exe"
 $PythonUrl   = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
 $LuaJitUrl   = "https://gitlab.com/windows-luajit/windows-luajit-installer/uploads/0a63f974de75d0568feafbb123d04ff6/luajit-installer-1.0.8.exe"
 
@@ -180,6 +190,99 @@ function Invoke-GuestUnmountShare {
     try { Invoke-GuestRun -Exe "C:\Windows\System32\cmd.exe" -Args @("/c net use Z: /delete /y >nul 2>&1") } catch { Write-Warning "Unmount Z: failed: $_" }
 }
 
+function Invoke-GuestCopyTo {
+    # Copy a host file into a guest directory over the Guest Additions control
+    # channel (no SMB share exposed to the guest). Used for sample delivery so a
+    # live sample never sees a \\vboxsrv path back to the host.
+    param([string]$HostPath, [string]$GuestDir)
+    $password = Get-AdminPassword
+    if (-not $password) { throw "No stored credentials. Run New-VM first." }
+    & $VBox guestcontrol $VmName copyto --username $AdminUser --password $password --target-directory "$GuestDir" "$HostPath" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "guestcontrol copyto failed for $HostPath -> $GuestDir (exit $LASTEXITCODE)." }
+}
+
+function Invoke-GuestCopyFrom {
+    param([string]$GuestPath, [string]$HostDir)
+    $password = Get-AdminPassword
+    if (-not $password) { throw "No stored credentials. Run New-VM first." }
+    New-Item -ItemType Directory -Force -Path $HostDir | Out-Null
+    & $VBox guestcontrol $VmName copyfrom --username $AdminUser --password $password --target-directory "$HostDir" "$GuestPath" 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Warning "guestcontrol copyfrom failed for $GuestPath (exit $LASTEXITCODE)." }
+}
+
+function Start-Sinkhole {
+    # Host-side fake-internet bound to the host-only adapter so the detonated
+    # sample resolves DNS and reaches HTTP(S)/TCP sinks instead of a dead net.
+    param([string]$AnswerIp, [string]$LogPath, [int]$DurationSeconds)
+    $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $py) { Write-Warning "python not on host PATH; skipping sinkhole."; return $null }
+    if (-not (Test-Path $SinkholePy)) { Write-Warning "sinkhole.py not found; skipping."; return $null }
+    Write-Host "Starting sinkhole on $AnswerIp (DNS/HTTP/HTTPS/TCP) for ~$DurationSeconds s..."
+    $args = @($SinkholePy, "--answer-ip", $AnswerIp, "--bind-ip", $AnswerIp,
+              "--log", $LogPath, "--duration", "$DurationSeconds", "--quiet")
+    try {
+        return Start-Process -FilePath $py -ArgumentList $args -PassThru -WindowStyle Hidden
+    } catch {
+        Write-Warning "Failed to start sinkhole: $_"
+        return $null
+    }
+}
+
+function Stop-Process-Safe {
+    param($Proc)
+    if ($Proc -and -not $Proc.HasExited) {
+        try { $Proc.Kill() } catch { Write-Warning "Could not stop process $($Proc.Id): $_" }
+    }
+}
+
+function Start-HostCapture {
+    # Prefer dumpcap (real pcapng) on the host-only adapter; fall back to the
+    # built-in netsh trace (.etl, convert later with etl2pcapng).
+    param([string]$OutDir)
+    $info = @{ Mode = "none"; Proc = $null; Etl = $null }
+    if (Test-Path $Dumpcap) {
+        $iface = Get-HostOnlyAdapterName
+        if ($iface) {
+            $pcap = Join-Path $OutDir "capture.pcapng"
+            try {
+                $p = Start-Process -FilePath $Dumpcap -ArgumentList @("-i", "`"$iface`"", "-w", "`"$pcap`"") -PassThru -WindowStyle Hidden
+                Write-Host "Packet capture (dumpcap) -> $pcap"
+                $info.Mode = "dumpcap"; $info.Proc = $p
+                return $info
+            } catch { Write-Warning "dumpcap failed: $_; falling back to netsh trace." }
+        }
+    }
+    $etl = Join-Path $OutDir "capture.etl"
+    $out = & netsh trace start capture=yes report=no overwrite=yes tracefile="$etl" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Packet capture (netsh trace) -> $etl"
+        $info.Mode = "netsh"; $info.Etl = $etl
+    } else {
+        Write-Warning "netsh trace start failed: $out (continuing without pcap)."
+    }
+    return $info
+}
+
+function Stop-HostCapture {
+    param($Capture)
+    if (-not $Capture) { return }
+    if ($Capture.Mode -eq "dumpcap") {
+        Stop-Process-Safe $Capture.Proc
+    } elseif ($Capture.Mode -eq "netsh") {
+        Write-Host "Stopping netsh trace (flushing capture)..."
+        & netsh trace stop 2>&1 | Out-Null
+    }
+}
+
+function Get-HostOnlyAdapterName {
+    # Best-effort: the Windows NIC name for the VirtualBox Host-Only adapter.
+    $nic = Get-NetAdapter -ErrorAction SilentlyContinue |
+           Where-Object { $_.InterfaceDescription -match "Host-Only" } |
+           Select-Object -First 1
+    if ($nic) { return $nic.Name }
+    return $null
+}
+
 function Add-SharedFolder {
     param([string]$HostPath, [switch]$Transient)
     $sfArgs = @("sharedfolder", "add", $VmName, "--name", $ShareName, "--hostpath", $HostPath, "--automount")
@@ -248,8 +351,12 @@ function New-AnalysisVm {
     & $VBox modifyvm $VmName --memory 4096 --cpus 2 --vram 128 `
         --graphicscontroller vmsvga --nic1 nat `
         --nic2 hostonly --host-only-adapter2 "VirtualBox Host-Only Ethernet Adapter" `
-        --audio none --usb off --ioapic on 2>&1
+        --audio none --usb off --ioapic on `
+        --clipboard-mode disabled --draganddrop disabled 2>&1
     if ($LASTEXITCODE -ne 0) { throw "modifyvm base settings failed." }
+    # Containment: no shared clipboard / drag-and-drop channel between a live
+    # sample and the host. Sample delivery for detonation uses guestcontrol
+    # copyto (control channel), never a mounted SMB share the sample can reach.
 
     if ($isWin11 -and -not $SkipUefi) {
         Write-Host "Windows 11 detected -> enabling EFI and TPM 2.0."
@@ -319,6 +426,9 @@ function New-ProvisionStaging {
     Copy-Item (Join-Path $RepoRoot "sysmon\sysmonconfig-export.xml") (Join-Path $staging "sysmon\sysmonconfig-export.xml") -Force
     Copy-Item (Join-Path $RepoRoot "collector.py") (Join-Path $staging "collector.py") -Force
     Copy-Item (Join-Path $RepoRoot "requirements.txt") (Join-Path $staging "requirements.txt") -Force
+    # The guest runs Z:\provision-vm.ps1, so the script itself must be staged.
+    Copy-Item (Join-Path $PSScriptRoot "provision-vm.ps1") (Join-Path $staging "provision-vm.ps1") -Force
+    Copy-Item (Join-Path $PSScriptRoot "detonate.ps1") (Join-Path $staging "detonate.ps1") -Force
 
     New-Item -ItemType Directory -Force -Path (Join-Path $staging "python") | Out-Null
     $pyInstaller = Join-Path $staging "python\python-installer.exe"
@@ -372,7 +482,8 @@ function Provision-Vm {
             "-Username", "admin@arbiterion.local",
             "-Password", "ChangeMe123!",
             "-StagingShare", $ShareName,
-            "-HostId", $HostId
+            "-HostId", $HostId,
+            "-DnsServer", $hostIp
         )
         Write-Host "Running provisioning inside the guest (streaming output)..."
         Invoke-GuestRun -Exe $psExe -Args $psArgs -Timeout 1800
@@ -391,68 +502,107 @@ function Snapshot-Vm {
     & $VBox snapshot $VmName take "Before-Detonation-$ts" --description "Clean state before detonation $ts" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "snapshot failed." }
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-    @{ detonation_started = $null; snapshot = "Before-Detonation-$ts"; snapshot_ts = $ts } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+    @{ detonation_started = $null; detonation_dir = $null; clean = $true; snapshot = "Before-Detonation-$ts"; snapshot_ts = $ts } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
     Write-Host "Snapshot 'Before-Detonation-$ts' taken."
 }
 
 function Detonate-Sample {
-    param([string]$Sample, [int]$ObserveSeconds)
+    param([string]$Sample, [int]$ObserveSeconds, [string]$Export = "#1", [string]$PassArgs = "")
     Assert-VmExists
     if (-not $Sample) { throw "-SamplePath is required." }
     if (-not (Test-Path $Sample)) { throw "Sample not found: $Sample" }
     if (-not (Test-Path $StateFile)) { throw "No snapshot state found. Run Snapshot first." }
 
+    $state = Get-Content $StateFile -Raw | ConvertFrom-Json
+
+    # Clean-state guard: never detonate on top of a dirty snapshot. A prior
+    # detonation that was not rolled back would contaminate telemetry and could
+    # chain persistence across runs.
+    if ($state.detonation_started) {
+        throw ("A detonation is already recorded against snapshot '$($state.snapshot)' " +
+               "(started $($state.detonation_started)). Run Export then Rollback to return " +
+               "to a clean snapshot before detonating again.")
+    }
+
+    $hostIp = Get-HostOnlyIp
+    $leaf = Split-Path $Sample -Leaf
+    $outDir = Join-Path ([Environment]::GetFolderPath("Desktop")) ("arbiterion-analysis-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
     Write-Host "`n=== DETONATION CONFIRMATION ===" -ForegroundColor Yellow
     Write-Host "You are about to run the sample '$Sample' inside the isolated VM '$VmName'." -ForegroundColor Yellow
-    Write-Host "  - Host-only network: NO internet path from the VM." -ForegroundColor Yellow
-    Write-Host "  - The sample will block on its connectivity check (microsoft.com) and never reach C2." -ForegroundColor Yellow
-    Write-Host "  - Alerts will be collected by Sysmon/collector and persisted in host PostgreSQL." -ForegroundColor Yellow
+    Write-Host "  - Network: host-only (no internet). A sinkhole on $hostIp answers DNS/HTTP(S)/TCP" -ForegroundColor Yellow
+    Write-Host "    so the sample's C2/beacon attempts resolve and are logged (never forwarded)." -ForegroundColor Yellow
+    Write-Host "  - Sample is delivered over the guest-control channel (no SMB share exposed)." -ForegroundColor Yellow
+    Write-Host "  - Sysmon/collector alerts persist in host PostgreSQL; pcap + sinkhole log + manifest" -ForegroundColor Yellow
+    Write-Host "    are written to: $outDir" -ForegroundColor Yellow
     $confirm = Read-Host "Type 'DETONATE' to continue"
-    if ($confirm -ne "DETONATE") { Write-Host "Aborted."; return }
+    if ($confirm -ne "DETONATE") { Write-Host "Aborted."; Remove-Item $outDir -Recurse -Force -ErrorAction SilentlyContinue; return }
 
-    $state = Get-Content $StateFile -Raw | ConvertFrom-Json
-    $staging = Initialize-Staging "detonate"
+    # Chain-of-custody manifest (sha256 etc.) before anything runs.
+    $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if ($py -and (Test-Path $ManifestPy)) {
+        & $py $ManifestPy record --sample $Sample --out $outDir --vm $VmName `
+            --observe $ObserveSeconds --snapshot $state.snapshot --extra "delivery=guestcontrol" 2>&1 | Write-Host
+    } else {
+        Write-Warning "python/lab_manifest.py unavailable; skipping chain-of-custody manifest."
+    }
+
+    $sinkLog = Join-Path $outDir "sinkhole.jsonl"
+    $sinkProc = $null
+    $capture = $null
     try {
-        Copy-Item $Sample (Join-Path $staging (Split-Path $Sample -Leaf)) -Force
-        Add-SharedFolder -HostPath $staging -Transient
-        Invoke-GuestMountShare -Share $ShareName
-        $leaf = Split-Path $Sample -Leaf
-        $copyCmd = "/c copy /Y Z:\$leaf C:\Users\$AdminUser\Desktop\$leaf"
-        Invoke-GuestRun -Exe "C:\Windows\System32\cmd.exe" -Args @($copyCmd)
+        # Deliver sample + dispatcher over the control channel (no SMB share).
+        Write-Host "Delivering sample via guestcontrol copyto (no SMB share)..."
+        Invoke-GuestCopyTo -HostPath $Sample -GuestDir $GuestDesktop
+        if (Test-Path $DetonatePs1) {
+            Invoke-GuestCopyTo -HostPath $DetonatePs1 -GuestDir $GuestDesktop
+        } else {
+            throw "detonate.ps1 not found on host at $DetonatePs1."
+        }
 
-        $ljPath = Get-LuaJitGuestPath
-        Write-Host "Detonating with $ljPath ..."
-        Invoke-GuestStart -Exe "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Args @(
+        # Fake-internet + packet capture wrap the whole observation window.
+        $sinkProc = Start-Sinkhole -AnswerIp $hostIp -LogPath $sinkLog -DurationSeconds ($ObserveSeconds + 30)
+        $capture = Start-HostCapture -OutDir $outDir
+        Start-Sleep -Seconds 2  # let listeners bind before detonation
+
+        $guestSample   = Join-Path $GuestDesktop $leaf
+        $guestDetonate = Join-Path $GuestDesktop "detonate.ps1"
+        $guestResult   = Join-Path $GuestDesktop "detonation-result.json"
+        Write-Host "Detonating '$leaf' via type dispatcher..."
+        $psExe = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        Invoke-GuestRun -Exe $psExe -Args @(
             "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-Command", "Set-Location C:\Users\$AdminUser\Desktop; & '$ljPath' '$leaf' > C:\Users\$AdminUser\Desktop\sample-output.txt 2>&1"
-        )
+            "-File", "$guestDetonate",
+            "-SamplePath", "$guestSample",
+            "-DllExport", "$Export",
+            "-Arguments", "$PassArgs",
+            "-ResultPath", "$guestResult"
+        ) -Timeout 180
 
-        Write-Host "Observing for $ObserveSeconds seconds..."
+        Write-Host "Observing for $ObserveSeconds seconds (sample running in guest)..."
         Start-Sleep -Seconds $ObserveSeconds
 
-        # Capture process list + screenshot for the report
-        $psCmd = "Get-Process | Where-Object { `$_.Path -match 'luajit|$leaf' } | Select-Object Id,ProcessName,Path | ConvertTo-Json"
-        $psOut = Invoke-GuestRun -Exe "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Args @("-NoProfile", "-Command", $psCmd) -Timeout 60
-        Write-Host "Guest processes:"
-        Write-Host $psOut
-    } finally {
-        Invoke-GuestUnmountShare
-        Remove-SharedFolder
-        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Detonation staging removed."
-    }
-    $state | Add-Member -NotePropertyName detonation_started -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
-    $state | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
-    Write-Host "`nDetonation complete. Next: .\scripts\analysis-vm.ps1 Export (required before Rollback)"
-}
+        # Pull the launch result + any captured sample output back to the host.
+        Invoke-GuestCopyFrom -GuestPath $guestResult -HostDir $outDir
+        Invoke-GuestCopyFrom -GuestPath (Join-Path $GuestDesktop "sample-output.txt") -HostDir $outDir
 
-function Get-LuaJitGuestPath {
-    # Stored from provisioning; fall back to common location.
-    $psCmd = "Get-ChildItem 'C:\Program Files\LuaJIT*' -Filter luajit.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName"
-    $out = Invoke-GuestRun -Exe "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Args @("-NoProfile", "-Command", $psCmd) -Timeout 120
-    $path = ($out | Select-Object -Last 1 | Where-Object { $_ -match "luajit.exe" } | Out-String).Trim()
-    if (-not $path) { throw "Could not locate luajit.exe in the guest." }
-    return $path
+        # Snapshot the live process tree for the report.
+        $psCmd = "Get-Process | Select-Object Id,ProcessName,Path,StartTime | ConvertTo-Json -Depth 3"
+        $psOut = Invoke-GuestRun -Exe $psExe -Args @("-NoProfile", "-Command", $psCmd) -Timeout 60
+        Set-Content -Path (Join-Path $outDir "guest-processes.json") -Value $psOut -Encoding UTF8
+    } finally {
+        Stop-HostCapture $capture
+        Stop-Process-Safe $sinkProc
+        Write-Host "Capture + sinkhole stopped."
+    }
+
+    $state | Add-Member -NotePropertyName detonation_started -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
+    $state | Add-Member -NotePropertyName detonation_dir -NotePropertyValue $outDir -Force
+    $state | Add-Member -NotePropertyName clean -NotePropertyValue $false -Force
+    $state | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+    Write-Host "`nDetonation complete. Artifacts in $outDir"
+    Write-Host "Next: .\scripts\analysis-vm.ps1 Export (required before Rollback)"
 }
 
 function Export-Results {
@@ -460,7 +610,16 @@ function Export-Results {
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $py) { throw "Python not found on the HOST; cannot run export." }
 
-    $outDir = Join-Path ([Environment]::GetFolderPath("Desktop")) ("arbiterion-analysis-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    # Reuse the detonation artifact dir (manifest/pcap/sinkhole log) when present
+    # so the alert export lands alongside them.
+    $outDir = $null
+    if (Test-Path $StateFile) {
+        $st = Get-Content $StateFile -Raw | ConvertFrom-Json
+        if ($st.detonation_dir -and (Test-Path $st.detonation_dir)) { $outDir = $st.detonation_dir }
+    }
+    if (-not $outDir) {
+        $outDir = Join-Path ([Environment]::GetFolderPath("Desktop")) ("arbiterion-analysis-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    }
     Write-Host "Exporting alerts for host '$HostId'..."
     & $py (Join-Path $PSScriptRoot "export-results.py") export --host $HostId --out $outDir 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Export failed." }
@@ -499,6 +658,14 @@ function Rollback-Vm {
     Start-Sleep -Seconds 3
     & $VBox snapshot $VmName restore $state.snapshot 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "snapshot restore failed." }
+
+    # Mark clean so the next Detonate is allowed again.
+    $state | Add-Member -NotePropertyName detonation_started -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName detonation_dir -NotePropertyValue $null -Force
+    $state | Add-Member -NotePropertyName clean -NotePropertyValue $true -Force
+    $state | Add-Member -NotePropertyName last_rollback -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
+    $state | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+
     Write-Host "Rollback complete. VM is clean again (state of '$($state.snapshot)')."
     Write-Host "Start it anytime with: VBoxManage startvm $VmName --type headless"
 }
@@ -532,7 +699,7 @@ if ($Command) {
         "New-VM"    { New-AnalysisVm -Iso $IsoPath -Key $ProductKey -ImageIndex $ImageIndex -SkipUefi:$SkipUefi }
         "Provision" { Provision-Vm }
         "Snapshot"  { Snapshot-Vm }
-        "Detonate"  { Detonate-Sample -Sample $SamplePath -ObserveSeconds $Seconds }
+        "Detonate"  { Detonate-Sample -Sample $SamplePath -ObserveSeconds $Seconds -Export $DllExport -PassArgs $SampleArgs }
         "Export"    { Export-Results }
         "Rollback"  { Rollback-Vm }
         "Remove"    { Remove-Vm }

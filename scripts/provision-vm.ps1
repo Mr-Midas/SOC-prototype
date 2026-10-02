@@ -39,7 +39,9 @@ param(
 
     [string]$StagingDrive = "Z:",
 
-    [string]$HostId = ""
+    [string]$HostId = "",
+
+    [string]$DnsServer = "192.168.56.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,6 +171,14 @@ if ($nic) {
     } else {
         Write-Host "Set $nic to 192.168.56.101/24"
     }
+    # Point DNS at the host sinkhole so the detonated sample's name lookups
+    # resolve (to the sinkhole) and are logged, instead of failing outright.
+    netsh interface ipv4 set dnsservers name="$nic" static $DnsServer primary | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to set DNS to $DnsServer; sinkhole DNS capture may not work."
+    } else {
+        Write-Host "Guest DNS -> $DnsServer (sinkhole)"
+    }
 } else {
     Write-Warning "No active physical adapter found; skipping static IP (host-only link still allows 192.168.56.1)."
 }
@@ -179,6 +189,13 @@ Copy-Item (Join-Path $Staging "collector.py") $ColDir -Force
 if (Test-Path (Join-Path $Staging "requirements.txt")) {
     Copy-Item (Join-Path $Staging "requirements.txt") $ColDir -Force
 }
+# Install the detonation dispatcher alongside the collector (host also copies a
+# fresh copy at detonation time; this keeps one present for manual use).
+$detonateSrc = Join-Path $Staging "detonate.ps1"
+if (Test-Path $detonateSrc) {
+    Copy-Item $detonateSrc $ColDir -Force
+    Write-Host "Installed detonate.ps1 to $ColDir"
+}
 
 $env:COLLECTOR_ENDPOINT = $Endpoint
 $env:COLLECTOR_LOGIN_URL = $LoginUrl
@@ -188,6 +205,16 @@ $env:COLLECTOR_SHARED_SECRET = $Secret
 $env:COLLECTOR_HOST_ID   = $HostId
 
 # Persistent launcher (pythonw => no console window on logon)
+#
+# SECURITY (residual risk): COLLECTOR_PASSWORD / COLLECTOR_SHARED_SECRET are
+# written in cleartext here and live on the guest disk. A detonated sample runs
+# with the same (admin) token as the collector, so it can read this file. DPAPI
+# would NOT help (same-user malware can call the same unprotect API). The real
+# mitigation is to scope these credentials: the collector must authenticate as a
+# DEDICATED, INGEST-ONLY lab tenant whose token can only POST endpoint events —
+# never your admin account — so a stolen credential's blast radius is just "can
+# submit events to the throwaway lab tenant". Pass that tenant's -Username /
+# -Password / -Secret in from analysis-vm.ps1 Provision. See MALWARE-LAB.md.
 $cmdPath = Join-Path $ColDir "run-collector.cmd"
 @"
 @echo off
